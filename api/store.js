@@ -30,10 +30,36 @@
    ============================================================ */
 "use strict";
 
-const REDIS_URL =
-  process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL || "";
-const REDIS_TOKEN =
-  process.env.KV_REST_API_TOKEN || process.env.UPSTASH_REDIS_REST_TOKEN || "";
+/**
+ * Résout l'URL REST + le token d'écriture du magasin Redis, quel que soit
+ * le nommage des variables d'environnement. On gère les noms standards
+ * (Vercel KV, Upstash) puis, à défaut, tout couple « *REST*URL » / « *REST*TOKEN »
+ * — utile si un préfixe personnalisé a été appliqué lors du branchement.
+ * On exclut systématiquement les tokens en lecture seule (READ_ONLY).
+ */
+function resolveCreds() {
+  const env = process.env;
+  const known = [
+    ["KV_REST_API_URL", "KV_REST_API_TOKEN"],
+    ["UPSTASH_REDIS_REST_URL", "UPSTASH_REDIS_REST_TOKEN"],
+  ];
+  for (const [u, t] of known) {
+    if (env[u] && env[t]) return { url: env[u], token: env[t] };
+  }
+  const keys = Object.keys(env);
+  const isHttps = (v) => typeof v === "string" && /^https:\/\//.test(v);
+  const urlKey =
+    keys.find((k) => /REST.*URL$/i.test(k) && isHttps(env[k])) ||
+    keys.find((k) => /URL$/i.test(k) && isHttps(env[k]) && /REDIS|KV|UPSTASH|STORAGE/i.test(k));
+  const tokenKey =
+    keys.find((k) => /REST.*TOKEN$/i.test(k) && !/READ_ONLY/i.test(k)) ||
+    keys.find((k) => /TOKEN$/i.test(k) && !/READ_ONLY/i.test(k) && /REDIS|KV|UPSTASH|STORAGE/i.test(k));
+  return { url: urlKey ? env[urlKey] : "", token: tokenKey ? env[tokenKey] : "" };
+}
+
+const _creds = resolveCreds();
+const REDIS_URL = _creds.url || "";
+const REDIS_TOKEN = _creds.token || "";
 
 const K_IDS = "tg:ids";
 const K_REV = "tg:rev";
