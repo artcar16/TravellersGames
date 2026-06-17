@@ -1,47 +1,28 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 124" width="120" height="124">
+<svg viewBox="0 0 120 122" xmlns="http://www.w3.org/2000/svg" fill="none" role="img" aria-label="The Travellers">
   <defs>
-    <clipPath id="globe"><circle cx="60" cy="46" r="40"/></clipPath>
+    <clipPath id="tg-globe"><circle cx="60" cy="52" r="40"/></clipPath>
   </defs>
-
-  <!-- Globe : méridiens & parallèles -->
-  <g stroke="#c8a24b" fill="none" stroke-width="1.1">
-    <circle cx="60" cy="46" r="40" stroke-width="2.2"/>
-    <g clip-path="url(#globe)">
-      <line x1="60" y1="4" x2="60" y2="88"/>
-      <ellipse cx="60" cy="46" rx="27" ry="40"/>
-      <ellipse cx="60" cy="46" rx="13" ry="40"/>
-      <line x1="18" y1="26" x2="102" y2="26"/>
-      <line x1="14" y1="36" x2="106" y2="36"/>
-      <line x1="13" y1="46" x2="107" y2="46"/>
-      <line x1="14" y1="56" x2="106" y2="56"/>
-      <line x1="18" y1="66" x2="102" y2="66"/>
+  <!-- globe -->
+  <g stroke="#B0892F" stroke-width="1.4">
+    <circle cx="60" cy="52" r="40"/>
+    <g clip-path="url(#tg-globe)" stroke-width="0.9" opacity="0.92">
+      <line x1="60" y1="12" x2="60" y2="92"/>
+      <ellipse cx="60" cy="52" rx="13" ry="40"/>
+      <ellipse cx="60" cy="52" rx="26" ry="40"/>
+      <line x1="20" y1="52" x2="100" y2="52"/>
+      <ellipse cx="60" cy="52" rx="40" ry="13"/>
+      <ellipse cx="60" cy="52" rx="40" ry="26"/>
     </g>
   </g>
-
-  <!-- Écu central -->
-  <path d="M60 22 L86 31 V52 C86 72 73 83 60 90 C47 83 34 72 34 52 V31 Z"
-        fill="#102a4c" stroke="#c8a24b" stroke-width="2.4"/>
-  <!-- Hachures héraldiques -->
-  <g stroke="#c8a24b" stroke-width="1" fill="none" opacity="0.85" clip-path="">
-    <path d="M40 36 q20 -6 40 0" />
-    <path d="M40 44 q20 -6 40 0" />
-    <line x1="44" y1="50" x2="44" y2="74"/>
-    <line x1="50" y1="50" x2="50" y2="78"/>
-    <line x1="56" y1="50" x2="56" y2="82"/>
-    <line x1="64" y1="50" x2="64" y2="82"/>
-    <line x1="70" y1="50" x2="70" y2="78"/>
-    <line x1="76" y1="50" x2="76" y2="74"/>
+  <!-- shield -->
+  <path d="M60 32 L80 39 L80 60 Q80 79 60 89 Q40 79 40 60 L40 39 Z"
+        fill="#FBFAF7" stroke="#B0892F" stroke-width="1.7" stroke-linejoin="round"/>
+  <g stroke="#B0892F" stroke-width="1.15" stroke-linecap="round">
+    <path d="M48 49 L60 44 L72 49"/>
+    <path d="M48 58 L60 53 L72 58"/>
+    <path d="M48 67 L60 62 L72 67"/>
   </g>
-  <!-- Monogramme T -->
-  <g fill="#c8a24b">
-    <rect x="52" y="56" width="16" height="3.2"/>
-    <rect x="58.4" y="56" width="3.2" height="18"/>
-  </g>
-
-  <!-- Banderole -->
-  <path d="M6 100 Q60 90 114 100 L110 113 Q60 104 10 113 Z"
-        fill="#102a4c" stroke="#c8a24b" stroke-width="1.6"/>
-  <path d="M6 100 L2 94 L12 99 Z M114 100 L118 94 L108 99 Z" fill="#c8a24b"/>
-  <text x="60" y="109" text-anchor="middle" font-family="Georgia, 'Times New Roman', serif"
-        font-size="7.5" letter-spacing="1.4" fill="#c8a24b">THE TRAVELLERS</text>
+  <!-- banner -->
+  <path d="M20 98 Q60 110 100 98 L95 109 Q60 120 25 109 Z" fill="#B0892F" opacity="0.9"/>
+  <path d="M20 98 L13 92 L24 98 Z M100 98 L107 92 L96 98 Z" fill="#B0892F" opacity="0.9"/>
 </svg>

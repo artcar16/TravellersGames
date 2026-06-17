@@ -2,8 +2,9 @@
 <html lang="fr">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>The Travellers — Suivi de Tournois de Backgammon</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="theme-color" content="#FBFAF7" />
+  <title>The Travellers — Backgammon</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600;700&family=Jost:wght@300;400;500;600&display=swap" rel="stylesheet" />
@@ -11,28 +12,22 @@
   <link rel="icon" href="assets/logo.svg" type="image/svg+xml" />
 </head>
 <body>
-  <header class="topbar">
+  <header class="topbar" id="topbar">
     <a class="brand" href="#/">
-      <img src="assets/logo.svg" alt="The Travellers" class="brand-logo" />
-      <span class="brand-text">
-        <span class="brand-name">THE&nbsp;TRAVELLERS</span>
-        <span class="brand-sub">Backgammon · Suivi de Tournois</span>
-      </span>
+      <img src="assets/logo.svg" alt="" class="brand-logo" />
+      <span class="brand-name">The&nbsp;Travellers</span>
     </a>
-    <nav class="topnav" id="topnav"></nav>
-    <div class="sync-pill" id="sync-pill" title="État de la base de données partagée (cloud)">
-      <span class="dot"></span><span id="sync-label">Local</span>
-    </div>
+    <button class="status-dot" id="sync-pill" type="button" title="État de la base de données partagée">
+      <span class="dot"></span><span id="sync-label" class="status-label">Local</span>
+    </button>
   </header>
 
   <main id="app" class="app"></main>
 
-  <footer class="footer">
-    <span>The Travellers Club · Backgammon</span>
-    <span id="data-status">Base de données : cloud partagé</span>
+  <footer class="footer" id="footer">
+    <span>The Travellers · Paris</span>
   </footer>
 
-  <!-- Modal host -->
   <div id="modal-root"></div>
 
   <script src="js/store.js"></script>
