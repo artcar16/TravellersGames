@@ -1,0 +1,15 @@
+# Secrets / variables d'environnement — NE JAMAIS committer
+.env
+.env.*
+!.env.example
+
+# Vercel
+.vercel
+
+# Dépendances (si un jour on en ajoute)
+node_modules/
+
+# Divers OS / éditeurs
+.DS_Store
+Thumbs.db
+*.log
