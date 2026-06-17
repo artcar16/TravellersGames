@@ -6,7 +6,7 @@
   "use strict";
 
   const Store = TG.Store;
-  const GitHub = TG.GitHub;
+  const Cloud = TG.Cloud;
   const $app = document.getElementById("app");
   const $nav = document.getElementById("topnav");
 
@@ -673,64 +673,53 @@
     saveRow.appendChild(delBtn);
     $app.appendChild(saveRow);
 
-    // ----- Synchronisation GitHub -----
-    $app.appendChild(renderGithubCard());
+    // ----- Base de données (cloud partagé) -----
+    $app.appendChild(renderCloudCard());
   });
 
-  function renderGithubCard() {
-    const cfg = GitHub.getConfig();
+  function renderCloudCard() {
     const card = el('<div class="card"></div>');
-    card.appendChild(el('<div class="section-title"><h2>Base de données &amp; synchronisation GitHub</h2><div class="line"></div></div>'));
-    card.appendChild(el(`<p class="muted">Les données sont enregistrées dans votre navigateur et peuvent être synchronisées vers des fichiers <code>.md</code> du dépôt GitHub. Un jeton d’accès personnel (PAT) est nécessaire pour écrire. Il reste stocké uniquement dans ce navigateur.</p>`));
-    const grid = el('<div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(180px,1fr))"></div>');
-    const ownerI = el(`<input type="text" value="${esc(cfg.owner || "")}" placeholder="owner / utilisateur" />`);
-    const repoI = el(`<input type="text" value="${esc(cfg.repo || "")}" placeholder="nom du dépôt" />`);
-    const branchI = el(`<input type="text" value="${esc(cfg.branch || "main")}" />`);
-    const pathI = el(`<input type="text" value="${esc(cfg.path || "data")}" />`);
-    const tokenI = el(`<input type="password" value="${esc(cfg.token || "")}" placeholder="ghp_… (Personal Access Token)" />`);
-    grid.appendChild(wrapField("Owner", ownerI));
-    grid.appendChild(wrapField("Dépôt", repoI));
-    grid.appendChild(wrapField("Branche", branchI));
-    grid.appendChild(wrapField("Dossier des données", pathI));
-    card.appendChild(grid);
-    card.appendChild(wrapField("Personal Access Token (Contents: Read & Write)", tokenI));
+    card.appendChild(el('<div class="section-title"><h2>Base de données &amp; partage</h2><div class="line"></div></div>'));
 
-    const row = el('<div class="btn-row" style="margin-top:14px"></div>');
-    const saveB = el('<button class="btn subtle">Enregistrer la config</button>');
-    saveB.onclick = () => {
-      GitHub.save({ owner: ownerI.value.trim(), repo: repoI.value.trim(), branch: branchI.value.trim() || "main", path: pathI.value.trim() || "data", token: tokenI.value.trim() });
-      toast("Configuration GitHub enregistrée."); updateSyncPill();
-    };
-    const testB = el('<button class="btn subtle">Tester la connexion</button>');
-    testB.onclick = async () => {
-      GitHub.save({ owner: ownerI.value.trim(), repo: repoI.value.trim(), branch: branchI.value.trim() || "main", path: pathI.value.trim() || "data", token: tokenI.value.trim() });
-      testB.textContent = "Test…"; testB.disabled = true;
-      const r = await GitHub.testConnection();
-      testB.disabled = false; testB.textContent = "Tester la connexion";
+    const cloud = Cloud.isCloud();
+    if (cloud) {
+      card.appendChild(el(`<div class="info-banner ok" style="margin-bottom:12px">
+        <span class="ico">☁︎</span>
+        <div><strong>Connecté au cloud.</strong><br/>
+        <span class="muted">Les données sont enregistrées en ligne et <strong>partagées en temps réel avec tout le monde</strong>. Aucun réglage n’est nécessaire pour les joueurs : il leur suffit d’ouvrir le lien.</span></div>
+      </div>`));
+    } else {
+      card.appendChild(el(`<div class="info-banner" style="margin-bottom:12px">
+        <span class="ico">📦</span>
+        <div><strong>Mode local (ce navigateur).</strong><br/>
+        <span class="muted">Le partage cloud n’est pas encore activé : les données restent sur cet appareil. Pour activer le partage entre tous les joueurs, branchez un magasin de données dans Vercel (une seule fois) — voir le <code>README</code>. Une fois branché, tout fonctionne automatiquement, sans aucun token.</span></div>
+      </div>`));
+    }
+
+    const row = el('<div class="btn-row" style="margin-top:6px"></div>');
+    const reloadB = el('<button class="btn subtle">⟳ Recharger depuis le cloud</button>');
+    reloadB.disabled = !cloud;
+    reloadB.onclick = async () => {
+      reloadB.textContent = "Chargement…"; reloadB.disabled = true;
+      const r = await Cloud.pullNow();
+      reloadB.disabled = false; reloadB.textContent = "⟳ Recharger depuis le cloud";
       if (r.error) toast(r.error, "err");
-      else toast("Connexion OK" + (r.permissions && r.permissions.push ? " — écriture autorisée." : " — lecture seule."));
-      updateSyncPill();
-    };
-    const pushB = el('<button class="btn">⬆︎ Pousser vers GitHub</button>');
-    pushB.onclick = async () => {
-      pushB.textContent = "Envoi…"; pushB.disabled = true;
-      const r = await GitHub.syncNow("sync manuelle");
-      pushB.disabled = false; pushB.textContent = "⬆︎ Pousser vers GitHub";
-      if (r.error) toast(r.error, "err"); else if (r.skipped) toast("Configurez d’abord owner/dépôt/token.", "err"); else toast("Données poussées vers GitHub ✓");
-      updateSyncPill();
-    };
-    const pullB = el('<button class="btn subtle">⬇︎ Charger depuis GitHub</button>');
-    pullB.onclick = async () => {
-      if (!confirm("Charger les données depuis GitHub écrasera les données locales. Continuer ?")) return;
-      pullB.textContent = "Chargement…"; pullB.disabled = true;
-      const r = await GitHub.pullAll();
-      pullB.disabled = false; pullB.textContent = "⬇︎ Charger depuis GitHub";
-      if (r.error) toast(r.error, "err");
-      else if (r.empty) toast("Aucune donnée trouvée sur GitHub.");
       else { toast("Chargé : " + r.count + " tournoi(s)."); render(); }
       updateSyncPill();
     };
-    row.appendChild(saveB); row.appendChild(testB); row.appendChild(pushB); row.appendChild(pullB);
+    row.appendChild(reloadB);
+
+    if (cloud) {
+      const pushB = el('<button class="btn subtle">⬆︎ Forcer l’envoi</button>');
+      pushB.onclick = async () => {
+        pushB.textContent = "Envoi…"; pushB.disabled = true;
+        const r = await Cloud.pushPending("envoi manuel");
+        pushB.disabled = false; pushB.textContent = "⬆︎ Forcer l’envoi";
+        if (r && r.error) toast(r.error, "err"); else toast("Données envoyées ✓");
+        updateSyncPill();
+      };
+      row.appendChild(pushB);
+    }
     card.appendChild(row);
     return card;
   }
@@ -741,10 +730,10 @@
   function updateSyncPill() {
     const pill = document.getElementById("sync-pill");
     const label = document.getElementById("sync-label");
-    const st = GitHub.getStatus();
+    const st = Cloud.getStatus();
     pill.classList.remove("connected", "error");
-    if (st === "connected") { pill.classList.add("connected"); label.textContent = "GitHub"; }
-    else if (st === "syncing") { label.textContent = "Sync…"; }
+    if (st === "connected") { pill.classList.add("connected"); label.textContent = "Cloud"; }
+    else if (st === "syncing") { label.textContent = "Synchro…"; }
     else if (st === "error") { pill.classList.add("error"); label.textContent = "Erreur"; }
     else { label.textContent = "Local"; }
   }
@@ -758,27 +747,44 @@
   // ============================================================
   function boot() {
     Store.load();
-    GitHub.load();
-    GitHub.onStatus(updateSyncPill);
+    Cloud.onStatus(updateSyncPill);
     updateSyncPill();
 
     document.getElementById("sync-pill").onclick = () => {
       const path = parseHash();
       const m = path.match(/^\/t\/([^/]+)/);
       if (m) navigate("#/t/" + m[1] + "/settings");
-      else toast("Configurez GitHub dans les réglages d’un tournoi.");
+      else toast(Cloud.isCloud() ? "Données partagées via le cloud ☁︎" : "Mode local — voir Réglages pour activer le partage.");
     };
 
     Store.onChange(() => { renderNav(); });
     window.addEventListener("hashchange", () => { clearRotate(); render(); renderNav(); });
 
+    // Rafraîchit l'affichage quand une mise à jour distante arrive,
+    // sans interrompre une saisie en cours.
+    Cloud.onRemoteChange(() => {
+      const a = document.activeElement;
+      const typing = a && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName);
+      const modalOpen = !!document.querySelector(".modal-overlay");
+      if (!typing && !modalOpen) { render(); renderNav(); }
+    });
+
     render();
     renderNav();
 
-    // Chargement initial depuis GitHub si configuré en lecture et base locale vide.
-    if (GitHub.canRead() && !Store.listTournaments().length) {
-      GitHub.pullAll().then((r) => { if (r && r.ok && r.count) { render(); renderNav(); } });
-    }
+    // Démarrage du cloud : sonde le backend, aligne les données, puis
+    // active le rafraîchissement « temps réel ».
+    Cloud.init().then((mode) => {
+      updateSyncPill();
+      if (mode === "cloud") {
+        Cloud.bootSync().then(() => {
+          render();
+          renderNav();
+          updateSyncPill();
+          Cloud.startPolling();
+        });
+      }
+    });
   }
 
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", boot);

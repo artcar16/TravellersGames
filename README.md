@@ -1,10 +1,13 @@
 # The Travellers — Suivi de Tournois de Backgammon
 
-Application web statique (hébergeable sur **GitHub Pages**) pour gérer des
-tournois de backgammon à élimination directe au sein du club **The Travellers**.
+Application web pour gérer des tournois de backgammon à élimination directe
+au sein du club **The Travellers**.
 
-La **base de données est constituée de fichiers Markdown** (`data/*.md`)
-versionnés dans le dépôt GitHub.
+- **Hébergement : Vercel** (site statique + fonctions serverless).
+- **Base de données : cloud partagé** (Vercel KV / Redis Upstash) — toutes les
+  données sont en ligne et **partagées en temps réel avec tout le monde**.
+  Les joueurs n'ont **aucun token ni réglage** à saisir : il leur suffit
+  d'ouvrir le lien.
 
 ## Fonctionnalités
 
@@ -20,45 +23,59 @@ versionnés dans le dépôt GitHub.
     en cours (adversaire + nombre de points de la manche), saisit le score,
     puis l'app affiche son match suivant — ou *« patientez »* si l'adversaire
     n'a pas encore terminé.
-  - **Réglages** : nombre de joueurs, valeur des manches (ex. manche 1 = 7 pts,
-    manche 2 = 9 pts…), règlement, repêchage on/off, poule secondaire on/off,
-    rotation automatique, et configuration de la synchronisation GitHub.
+  - **Réglages** : nombre de joueurs, valeur des manches, règlement,
+    repêchage on/off, poule secondaire on/off, rotation automatique, et
+    état de la base de données partagée.
 
-## La base de données en `.md` — comment ça marche
+## Comment fonctionne la base de données partagée
 
-GitHub Pages est un hébergement **statique** : une page ne peut pas écrire de
-fichier côté serveur. La persistance fonctionne donc en deux temps :
+L'application est servie en statique, mais Vercel exécute une petite
+**fonction serverless** (`api/store.js`) qui parle à un magasin **Redis**
+(Vercel KV / Upstash). La **clé secrète reste côté serveur** : contrairement
+à l'ancienne approche par token GitHub, plus rien de sensible n'est exposé
+dans le navigateur.
 
-1. **Travail local** — toutes les données sont enregistrées dans le
-   `localStorage` du navigateur (fonctionne hors-ligne, sans aucune config).
-2. **Synchronisation GitHub** — depuis *Réglages → Base de données*, on
-   renseigne `owner`, dépôt, branche et un **Personal Access Token (PAT)**.
-   L'application lit et écrit alors les fichiers `data/*.md` directement via
-   l'**API GitHub Contents** (le navigateur committe à votre place). Le token
-   reste **uniquement** dans le navigateur de l'organisateur ; il n'est jamais
-   commité.
+- **Lecture / écriture** : l'app appelle `/api/store`. Tous les visiteurs
+  partagent la même base.
+- **Temps réel** : un compteur de révision est sondé régulièrement ; dès que
+  quelqu'un enregistre un score, les autres écrans se rafraîchissent tout
+  seuls (idéal pour l'affichage public et la saisie depuis les téléphones).
+- **Mode local de secours** : tant que le magasin n'est pas branché (ou hors
+  ligne), l'app fonctionne en `localStorage` sur l'appareil courant. Dès que
+  le cloud est disponible, les données locales existantes sont **migrées**
+  automatiquement vers le cloud.
 
-> Lecture publique (affichage des tableaux) : aucun token requis si le dépôt
-> est public. Écriture (saisie des scores persistée sur GitHub) : token requis.
+## Déploiement sur Vercel
 
-### Créer le token (fine-grained recommandé)
+### 1. Importer le projet
 
-1. GitHub → *Settings → Developer settings → Personal access tokens →
-   Fine-grained tokens*.
-2. Donner accès **uniquement à ce dépôt**.
-3. Permission **Repository → Contents : Read and write**.
-4. Copier le token dans *Réglages → Base de données → Personal Access Token*,
-   puis **Tester la connexion** et **Pousser vers GitHub**.
+1. Aller sur [vercel.com](https://vercel.com), **Add New… → Project**.
+2. Importer le dépôt GitHub `travellersgames`.
+3. Framework Preset : **Other** (aucune commande de build, aucun dossier de
+   sortie — c'est un site statique avec un dossier `api/`).
+4. **Deploy**. L'app est en ligne (ex. `https://travellersgames.vercel.app`).
+   À ce stade elle fonctionne déjà, en **mode local**.
 
-## Déploiement sur GitHub Pages
+### 2. Activer la base de données partagée (une seule fois)
 
-1. Pousser ce dépôt sur GitHub.
-2. *Settings → Pages* → Source : `Deploy from a branch` → branche `main`
-   (ou la branche publiée) → dossier `/ (root)`.
-3. Ouvrir l'URL `https://<owner>.github.io/<repo>/`.
+1. Dans le projet Vercel → onglet **Storage** → **Create Database** →
+   **KV** (Redis, *Upstash*) → choisir la région et créer.
+2. **Connect** ce magasin au projet. Vercel ajoute automatiquement les
+   variables d'environnement nécessaires
+   (`KV_REST_API_URL`, `KV_REST_API_TOKEN`, …).
+3. **Redeploy** le projet (onglet *Deployments* → *Redeploy*) pour que les
+   variables soient prises en compte.
 
-Le fichier `.nojekyll` désactive le traitement Jekyll afin que le dossier
-`data/` soit servi tel quel.
+C'est tout. La pastille en haut à droite passe de **« Local »** à
+**« Cloud »**, et toutes les données deviennent partagées entre tous les
+appareils, en temps réel.
+
+> Variables reconnues : `KV_REST_API_URL` / `KV_REST_API_TOKEN` (Vercel KV)
+> **ou** `UPSTASH_REDIS_REST_URL` / `UPSTASH_REDIS_REST_TOKEN` (Upstash
+> directement). Si l'on préfère créer le magasin sur
+> [upstash.com](https://upstash.com), il suffit d'ajouter ces deux variables
+> dans *Settings → Environment Variables* du projet Vercel, puis de
+> redéployer.
 
 ## Structure
 
@@ -67,19 +84,41 @@ index.html          Coquille de l'application
 assets/style.css    Charte graphique The Travellers (marine / or / crème)
 assets/logo.svg     Blason du club
 js/store.js         Modèle de données + logique de tournoi (bracket)
-js/github.js        Synchronisation API GitHub (lecture/écriture des .md)
+js/cloud.js         Synchro cloud partagée (appels à /api/store)
 js/app.js           Routeur SPA + rendu des vues
-data/*.md           Base de données (index + un fichier par tournoi)
+api/store.js        Fonction serverless : base de données Redis (Vercel KV)
+vercel.json         Configuration Vercel (routage / en-têtes de cache)
 ```
+
+## API interne (`/api/store`)
+
+| Méthode | Corps / Query                     | Effet                                   |
+|---------|-----------------------------------|-----------------------------------------|
+| `GET`   | `?meta=1`                         | `{ configured, rev }` (sondage léger)   |
+| `GET`   | —                                 | `{ configured, rev, tournaments }`      |
+| `POST`  | `{ op:"upsert", tournament }`     | Crée / met à jour un tournoi            |
+| `POST`  | `{ op:"delete", id }`             | Supprime un tournoi                     |
+| `POST`  | `{ op:"replaceAll", tournaments }`| Remplace toute la base (migration)      |
+
+Si aucune variable d'environnement n'est configurée, l'API répond
+`{ configured:false }` et l'app reste en mode local.
 
 ## Développement local
 
-Servir le dossier avec n'importe quel serveur statique, par ex. :
+Site statique : on peut le servir avec n'importe quel serveur statique
+(les appels `/api/*` renvoient alors 404 → l'app bascule simplement en mode
+local) :
 
 ```bash
 python3 -m http.server 8080
 # puis http://localhost:8080
 ```
 
-(L'ouverture directe en `file://` fonctionne aussi, mais la synchro GitHub
-nécessite un contexte `http(s)`.)
+Pour tester **aussi les fonctions serverless et le cloud en local**, utiliser
+la CLI Vercel :
+
+```bash
+npm i -g vercel
+vercel dev
+# renseigner au besoin KV_REST_API_URL / KV_REST_API_TOKEN dans un .env.local
+```

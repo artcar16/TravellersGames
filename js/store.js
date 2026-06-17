@@ -1,13 +1,12 @@
 /* ============================================================
    store.js — Modèle de données + logique de tournoi
-   Base de données : fichiers Markdown (data/*.md).
-   En local : miroir dans localStorage. Sync GitHub via github.js.
+   Persistance : miroir local (localStorage) + synchro cloud
+   partagée via cloud.js (fonction serverless Vercel + Vercel KV).
    ============================================================ */
 (function () {
   "use strict";
 
   const LS_KEY = "tg_backgammon_db_v1";
-  const LS_GH  = "tg_github_cfg_v1";
 
   // ----- État en mémoire -----
   let DB = { tournaments: [] };
@@ -35,12 +34,12 @@
 
   function onChange(fn) { listeners.push(fn); }
 
-  /** Sauvegarde locale + déclenche la sync GitHub (si configurée). */
+  /** Sauvegarde locale + déclenche la sync cloud (si configurée). */
   function commit(reason) {
     persistLocal();
     emit();
-    if (window.TG && TG.GitHub && TG.GitHub.isConfigured()) {
-      TG.GitHub.scheduleSync(reason || "maj");
+    if (window.TG && TG.Cloud && TG.Cloud.isCloud()) {
+      TG.Cloud.scheduleSync(reason || "maj");
     }
   }
 
@@ -565,7 +564,7 @@
     return lines.join("\n");
   }
 
-  /** Remplace toute la base à partir d'un objet (import / chargement GitHub). */
+  /** Remplace toute la base à partir d'un objet (import / chargement cloud). */
   function replaceAll(db) {
     if (db && Array.isArray(db.tournaments)) {
       DB = db;
@@ -597,6 +596,4 @@
     replaceAll, importTournament,
     defaultSettings,
   };
-
-  TG.LS_GH = LS_GH;
 })();
