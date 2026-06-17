@@ -80,26 +80,50 @@
   }
 
   /**
-   * Synchro initiale : aligne le local et le cloud.
-   * - Cloud vide + local non vide  -> migration du local vers le cloud.
-   * - Sinon                         -> le cloud fait foi.
+   * Synchro initiale : FUSION non destructive entre local et cloud.
+   * - Tournoi présent seulement en local  -> poussé vers le cloud (création).
+   * - Tournoi présent seulement dans le cloud -> adopté localement.
+   * - Tournoi présent des deux côtés -> on garde le plus récent (updatedAt),
+   *   le cloud gagnant par défaut en cas d'égalité.
+   * Aucune donnée n'est jamais écrasée en masse : deux navigateurs avec des
+   * tournois différents finissent tous les deux avec l'union des tournois.
    */
   async function bootSync() {
     if (mode !== "cloud") return { skipped: true };
     setStatus("syncing");
     try {
       const cloud = await fetchState();
-      const local = TG.Store.snapshot();
-      const localHas = local && Array.isArray(local.tournaments) && local.tournaments.length;
-      const cloudHas = cloud.tournaments && cloud.tournaments.length;
-      if (!cloudHas && localHas) {
-        await pushAll(local.tournaments);
-      } else {
-        applyRemote(cloud.tournaments);
-        lastRev = cloud.rev || lastRev;
+      const cloudById = {};
+      (cloud.tournaments || []).forEach((t) => { if (t && t.id) cloudById[t.id] = t; });
+      const local = TG.Store.snapshot().tournaments || [];
+
+      const winners = {};                 // id -> version à conserver
+      Object.keys(cloudById).forEach((id) => { winners[id] = cloudById[id]; });
+
+      const toPush = [];
+      local.forEach((t) => {
+        if (!t || !t.id) return;
+        const c = cloudById[t.id];
+        if (!c || (t.updatedAt || 0) > (c.updatedAt || 0)) { winners[t.id] = t; toPush.push(t); }
+      });
+
+      const union = Object.keys(winners).map((id) => winners[id]);
+      TG.Store.replaceAll({ tournaments: union });
+
+      // Mémorise l'état « connu du cloud » pour les versions adoptées.
+      Object.keys(winners).forEach((id) => { if (toPush.indexOf(winners[id]) === -1) lastSynced[id] = JSON.stringify(winners[id]); });
+
+      // Pousse les créations / versions locales plus récentes.
+      for (const t of toPush) {
+        const r = await post({ op: "upsert", tournament: t });
+        lastSynced[t.id] = JSON.stringify(t);
+        if (r && typeof r.rev === "number") lastRev = r.rev;
       }
+      if (!toPush.length) lastRev = cloud.rev || lastRev;
+
       setStatus("connected");
-      return { ok: true };
+      notifyRemote();
+      return { ok: true, merged: union.length, pushed: toPush.length };
     } catch (e) {
       console.error(e);
       setStatus("error");
@@ -190,13 +214,6 @@
     } finally {
       pushing = false;
     }
-  }
-
-  async function pushAll(tournaments) {
-    const r = await post({ op: "replaceAll", tournaments: tournaments });
-    (tournaments || []).forEach((t) => { if (t && t.id) lastSynced[t.id] = JSON.stringify(t); });
-    if (r && typeof r.rev === "number") lastRev = r.rev;
-    return r;
   }
 
   /** Rechargement manuel depuis le cloud (bouton Réglages). */

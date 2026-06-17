@@ -34,6 +34,9 @@
 
   function onChange(fn) { listeners.push(fn); }
 
+  /** Horodate un tournoi (sert à départager les conflits lors de la fusion cloud). */
+  function touch(t) { if (t) t.updatedAt = Date.now(); return t; }
+
   /** Sauvegarde locale + déclenche la sync cloud (si configurée). */
   function commit(reason) {
     persistLocal();
@@ -73,6 +76,7 @@
       name: name || "Nouveau tournoi",
       date: date || new Date().toISOString().slice(0, 10),
       createdAt: Date.now(),
+      updatedAt: Date.now(),
       settings: defaultSettings(),
       players: [],
       bracket: null,            // { rounds, matches } pour la poule principale
@@ -88,6 +92,7 @@
     const t = getTournament(id);
     if (!t) return null;
     Object.assign(t, patch);
+    touch(t);
     commit("maj tournoi " + t.name);
     return t;
   }
@@ -109,6 +114,7 @@
     if (!t) return null;
     const p = Object.assign({ id: uid("ply"), name: name || "Joueur", rating: null, club: "", note: "" }, extra || {});
     t.players.push(p);
+    touch(t);
     commit("ajout joueur " + p.name);
     return p;
   }
@@ -119,6 +125,7 @@
     const p = t.players.find((x) => x.id === pid);
     if (!p) return null;
     Object.assign(p, patch);
+    touch(t);
     commit("maj joueur " + p.name);
     return p;
   }
@@ -127,6 +134,7 @@
     const t = getTournament(tid);
     if (!t) return;
     t.players = t.players.filter((x) => x.id !== pid);
+    touch(t);
     commit("retrait joueur");
   }
 
@@ -328,6 +336,7 @@
     t.generatedAt = Date.now();
     // recalcul des statuts initiaux
     syncStatuses(t);
+    touch(t);
     commit("génération du tableau");
     return { ok: true };
   }
@@ -484,6 +493,7 @@
     }
 
     syncStatuses(t);
+    touch(t);
     commit("score enregistré");
 
     const next = findReadyMatchForPlayer(t, winner);
