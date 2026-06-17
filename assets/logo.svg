@@ -1,28 +1,47 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" width="120" height="120">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 124" width="120" height="124">
   <defs>
-    <linearGradient id="g" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#1a3a6e"/>
-      <stop offset="1" stop-color="#0d2240"/>
-    </linearGradient>
+    <clipPath id="globe"><circle cx="60" cy="46" r="40"/></clipPath>
   </defs>
-  <!-- Crest shield -->
-  <path d="M60 6 L106 18 V58 C106 86 86 104 60 114 C34 104 14 86 14 58 V18 Z"
-        fill="url(#g)" stroke="#c8a24b" stroke-width="3"/>
-  <path d="M60 14 L98 24 V57 C98 80 82 95 60 104 C38 95 22 80 22 57 V24 Z"
-        fill="none" stroke="#c8a24b" stroke-width="1" opacity="0.55"/>
-  <!-- Compass star (Travellers motif) -->
+
+  <!-- Globe : méridiens & parallèles -->
+  <g stroke="#c8a24b" fill="none" stroke-width="1.1">
+    <circle cx="60" cy="46" r="40" stroke-width="2.2"/>
+    <g clip-path="url(#globe)">
+      <line x1="60" y1="4" x2="60" y2="88"/>
+      <ellipse cx="60" cy="46" rx="27" ry="40"/>
+      <ellipse cx="60" cy="46" rx="13" ry="40"/>
+      <line x1="18" y1="26" x2="102" y2="26"/>
+      <line x1="14" y1="36" x2="106" y2="36"/>
+      <line x1="13" y1="46" x2="107" y2="46"/>
+      <line x1="14" y1="56" x2="106" y2="56"/>
+      <line x1="18" y1="66" x2="102" y2="66"/>
+    </g>
+  </g>
+
+  <!-- Écu central -->
+  <path d="M60 22 L86 31 V52 C86 72 73 83 60 90 C47 83 34 72 34 52 V31 Z"
+        fill="#102a4c" stroke="#c8a24b" stroke-width="2.4"/>
+  <!-- Hachures héraldiques -->
+  <g stroke="#c8a24b" stroke-width="1" fill="none" opacity="0.85" clip-path="">
+    <path d="M40 36 q20 -6 40 0" />
+    <path d="M40 44 q20 -6 40 0" />
+    <line x1="44" y1="50" x2="44" y2="74"/>
+    <line x1="50" y1="50" x2="50" y2="78"/>
+    <line x1="56" y1="50" x2="56" y2="82"/>
+    <line x1="64" y1="50" x2="64" y2="82"/>
+    <line x1="70" y1="50" x2="70" y2="78"/>
+    <line x1="76" y1="50" x2="76" y2="74"/>
+  </g>
+  <!-- Monogramme T -->
   <g fill="#c8a24b">
-    <polygon points="60,28 65,55 60,52 55,55"/>
-    <polygon points="60,92 55,65 60,68 65,65"/>
-    <polygon points="28,60 55,55 52,60 55,65"/>
-    <polygon points="92,60 65,65 68,60 65,55"/>
-    <polygon points="60,55 63,57 60,60 57,57" fill="#d8bd78"/>
+    <rect x="52" y="56" width="16" height="3.2"/>
+    <rect x="58.4" y="56" width="3.2" height="18"/>
   </g>
-  <!-- Backgammon triangles (points) base -->
-  <g fill="#c8a24b" opacity="0.9">
-    <polygon points="40,96 46,82 52,96"/>
-    <polygon points="54,96 60,82 66,96"/>
-    <polygon points="68,96 74,82 80,96"/>
-  </g>
-  <circle cx="60" cy="60" r="3.4" fill="#d8bd78"/>
+
+  <!-- Banderole -->
+  <path d="M6 100 Q60 90 114 100 L110 113 Q60 104 10 113 Z"
+        fill="#102a4c" stroke="#c8a24b" stroke-width="1.6"/>
+  <path d="M6 100 L2 94 L12 99 Z M114 100 L118 94 L108 99 Z" fill="#c8a24b"/>
+  <text x="60" y="109" text-anchor="middle" font-family="Georgia, 'Times New Roman', serif"
+        font-size="7.5" letter-spacing="1.4" fill="#c8a24b">THE TRAVELLERS</text>
 </svg>
