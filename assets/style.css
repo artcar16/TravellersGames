@@ -204,15 +204,7 @@ select option { background: var(--navy); }
 .seat .seedno { font-size: .68rem; color: var(--cream-2); opacity: .5; border: 1px solid var(--line); border-radius: 4px; padding: 0 5px; }
 .seat.bye .name { font-style: italic; opacity: .5; }
 
-/* ---------- Score entry wizard ---------- */
-.wizard { max-width: 620px; margin: 0 auto; }
-.player-pick { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px,1fr)); gap: 12px; }
-.player-pick button {
-  padding: 16px 12px; border-radius: 12px; border: 1px solid var(--line); background: rgba(255,255,255,.04);
-  color: var(--cream); font-size: 1rem; transition: .15s; text-align: left;
-}
-.player-pick button:hover { border-color: var(--gold); background: rgba(200,162,75,.1); color: var(--gold-soft); }
-
+/* ---------- Score entry ---------- */
 .match-summary { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin: 18px 0; }
 .vs-side { flex: 1; text-align: center; }
 .vs-side .pname { font-family: 'Cormorant Garamond', serif; font-size: 1.7rem; color: var(--gold-soft); }
@@ -229,6 +221,37 @@ select option { background: var(--navy); }
 
 .next-match-card { border: 1px dashed var(--gold); border-radius: 12px; padding: 18px; margin-top: 18px; text-align: center; }
 .next-match-card .big { font-family:'Cormorant Garamond',serif; font-size: 1.8rem; color: var(--gold-soft); }
+
+/* ---------- Score entry — liste des matchs en cours ---------- */
+.score-board { max-width: 780px; margin: 0 auto; }
+.score-board .section-title { margin-top: 22px; }
+.match-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 14px; }
+.match-card {
+  display: flex; flex-direction: column; gap: 12px; text-align: left;
+  padding: 18px 20px; border-radius: 12px; border: 1px solid var(--line);
+  background: linear-gradient(180deg, rgba(255,255,255,.06), rgba(255,255,255,.02));
+  color: var(--cream); transition: .16s; box-shadow: var(--shadow);
+}
+.match-card:hover { border-color: var(--gold); transform: translateY(-2px); }
+.mc-tag { font-size: .72rem; letter-spacing: 1.5px; text-transform: uppercase; color: var(--gold); }
+.mc-players { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.mc-p { font-family: 'Cormorant Garamond', serif; font-size: 1.3rem; color: var(--gold-soft); flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mc-players .mc-p:last-of-type { text-align: right; }
+.mc-vs { font-size: .7rem; letter-spacing: 2px; opacity: .5; }
+.mc-cta { font-size: .8rem; color: var(--cream-2); opacity: .7; }
+.match-card:hover .mc-cta { color: var(--gold-soft); opacity: 1; }
+
+/* ---------- Score entry — récap de destination ---------- */
+.outcome-head { text-align: center; margin-bottom: 6px; }
+.outcome-head .ico { font-size: 2.1rem; }
+.outcome-head .big { font-family:'Cormorant Garamond',serif; font-size: 1.7rem; color: var(--gold-soft); }
+.outcome-head .score { font-variant-numeric: tabular-nums; font-size: .92rem; letter-spacing: .5px; opacity: .75; }
+.dest { display: flex; align-items: center; gap: 14px; padding: 14px 16px; border-radius: 12px; border: 1px solid var(--line); background: rgba(200,162,75,.06); }
+.dest + .dest { margin-top: 10px; }
+.dest .dico { font-size: 1.5rem; line-height: 1; }
+.dest span { opacity: .8; font-size: .92rem; }
+.dest.win { border-color: var(--gold); background: rgba(200,162,75,.12); }
+.dest.out { border-color: rgba(155,44,44,.45); background: rgba(155,44,44,.08); }
 
 /* ---------- Empty / misc ---------- */
 .empty { text-align: center; padding: 60px 20px; opacity: .7; }

@@ -376,21 +376,22 @@
 
   function clearRotate() { if (rotateTimer) { clearInterval(rotateTimer); rotateTimer = null; } }
 
+  // Nom d'une manche (1..total), nommée depuis la fin du tableau.
+  function roundLabel(b, n) {
+    const fromEnd = b.totalRounds - n;
+    if (fromEnd === 0) return "Finale";
+    if (fromEnd === 1) return "Demi-finales";
+    if (fromEnd === 2) return "Quarts de finale";
+    return "Manche " + n;
+  }
+
   function renderBracketTree(t, b) {
     const wrap = el('<div class="bracket"></div>');
-    const roundNames = (n) => {
-      // n = numéro de manche (1..total). Nomme depuis la fin.
-      const fromEnd = b.totalRounds - n;
-      if (fromEnd === 0) return "Finale";
-      if (fromEnd === 1) return "Demi-finales";
-      if (fromEnd === 2) return "Quarts de finale";
-      return "Manche " + n;
-    };
     b.rounds.forEach((ids, ri) => {
       const round = ri + 1;
       const col = el('<div class="bracket-round"></div>');
       const pts = Store.pointsForRound(t, round);
-      col.appendChild(el(`<div class="round-title">${esc(roundNames(round))}${pts ? `<span class="round-pts">${pts} points</span>` : ""}</div>`));
+      col.appendChild(el(`<div class="round-title">${esc(roundLabel(b, round))}${pts ? `<span class="round-pts">${pts} points</span>` : ""}</div>`));
       ids.forEach((id) => {
         const m = Store.findMatch(b, id);
         col.appendChild(renderMatch(t, m));
@@ -439,101 +440,111 @@
 
   // ============================================================
   //  VUE : Saisie des scores
+  //  → Liste des matchs en cours. On clique un match, on saisit le
+  //    score, puis l'app indique qui avance où (et contre qui).
   // ============================================================
   route("/t/:id/scores", function (p) {
     const t = Store.getTournament(p.id);
     if (!t) return notFound();
-    $app.appendChild(pageHead(t.name, "Saisie des scores", "Sélectionnez votre nom pour enregistrer votre match.", null));
+    $app.appendChild(pageHead(t.name, "Saisie des scores", "Sélectionnez un match en cours pour enregistrer son résultat.", null));
     $app.appendChild(subtabs(t.id, "scores"));
 
     if (!t.bracket) {
       $app.appendChild(el('<div class="card empty"><div class="ico">📝</div><p>Le tableau n’est pas encore généré.</p></div>'));
       return;
     }
-    renderScoreStep(t, null);
+    renderMatchList(t);
   });
 
-  function renderScoreStep(t, selectedPid) {
-    const old = $app.querySelector(".wizard");
-    if (old) old.remove();
-    const wiz = el('<div class="wizard card"></div>');
-
-    if (!selectedPid) {
-      wiz.appendChild(el('<div class="section-title"><h2>Qui êtes-vous ?</h2><div class="line"></div></div>'));
-      const pick = el('<div class="player-pick"></div>');
-      t.players.slice().sort((a, b) => a.name.localeCompare(b.name)).forEach((pl) => {
-        const btn = el(`<button>${esc(pl.name)}</button>`);
-        btn.onclick = () => renderScoreStep(t, pl.id);
-        pick.appendChild(btn);
+  /** Tous les matchs « en cours » : les deux joueurs connus, pas encore joués. */
+  function readyMatches(t) {
+    const out = [];
+    [t.bracket, t.secondary].forEach((b) => {
+      if (!b) return;
+      b.matches.forEach((m) => {
+        if (m.status === "ready" && m.p1 && m.p2 && m.p1 !== "BYE" && m.p2 !== "BYE") out.push(m);
       });
-      wiz.appendChild(pick);
-      $app.appendChild(wiz);
+    });
+    return out;
+  }
+
+  /** Nom du vainqueur du tournoi (finale jouée), sinon null. */
+  function tournamentChampion(t) {
+    if (!t.bracket) return null;
+    const finalIds = t.bracket.rounds[t.bracket.rounds.length - 1];
+    const fm = Store.findMatch(t.bracket, finalIds[0]);
+    if (fm && fm.status === "done" && fm.winner && fm.winner !== "BYE") return Store.playerName(t, fm.winner);
+    return null;
+  }
+
+  /** Libellé « Poule · Manche · points » pour un match. */
+  function poolRoundLabel(t, m) {
+    const b = m.tag === "sec" ? t.secondary : t.bracket;
+    const pool = m.tag === "sec" ? "Poule secondaire" : "Tableau principal";
+    const pts = Store.pointsForRound(t, m.round);
+    return pool + " · " + roundLabel(b, m.round) + (pts ? " · " + pts + " pts" : "");
+  }
+
+  function renderMatchList(t) {
+    const ready = readyMatches(t);
+
+    if (!ready.length) {
+      const champ = tournamentChampion(t);
+      if (champ) {
+        $app.appendChild(el(`<div class="card info-banner ok" style="max-width:620px;margin:0 auto">
+          <span class="ico">🏆</span>
+          <div><strong>${esc(champ)} remporte le tournoi !</strong><br/>
+          <span class="muted">Tous les matchs ont été joués.</span></div></div>`));
+      } else {
+        $app.appendChild(el(`<div class="card empty"><div class="ico">⏳</div>
+          <h2>Aucun match en cours</h2>
+          <p class="muted">Les prochains matchs apparaîtront dès que les adversaires seront connus.</p></div>`));
+      }
       return;
     }
 
-    const pl = t.players.find((x) => x.id === selectedPid);
-    const back = el('<button class="btn subtle sm" style="margin-bottom:14px">‹ Changer de joueur</button>');
-    back.onclick = () => renderScoreStep(t, null);
-    wiz.appendChild(back);
-    wiz.appendChild(el(`<div class="section-title"><h2>${esc(pl.name)}</h2><div class="line"></div></div>`));
-
-    const ready = Store.findReadyMatchForPlayer(t, selectedPid);
-    if (ready) {
-      wiz.appendChild(renderScoreForm(t, ready, selectedPid));
-    } else {
-      const pending = Store.findPendingMatchForPlayer(t, selectedPid);
-      if (pending) {
-        const oppId = pending.p1 === selectedPid ? pending.p2 : pending.p1;
-        const oppName = oppId ? Store.playerName(t, oppId) : "votre prochain adversaire";
-        wiz.appendChild(el(`<div class="info-banner wait">
-          <span class="ico">⏳</span>
-          <div><strong>Patientez.</strong><br/>
-          <span class="muted">Votre prochain match attend la fin du match de ${esc(oppName)}. Revenez quand votre adversaire sera connu.</span></div>
-        </div>`));
-      } else {
-        // Plus de match : éliminé ou champion ?
-        const allDone = Store.allMatches(t).filter(m => m.p1 === selectedPid || m.p2 === selectedPid);
-        const isChampion = isPlayerChampion(t, selectedPid);
-        if (isChampion) {
-          wiz.appendChild(el(`<div class="info-banner ok"><span class="ico">🏆</span><div><strong>Félicitations, vainqueur du tournoi !</strong></div></div>`));
-        } else if (allDone.length) {
-          wiz.appendChild(el(`<div class="info-banner"><span class="ico">🎲</span><div>Vous n’avez plus de match à jouer pour le moment.</div></div>`));
-        } else {
-          wiz.appendChild(el(`<div class="info-banner"><span class="ico">🎲</span><div>Aucun match prévu pour vous.</div></div>`));
-        }
+    const board = el('<div class="score-board"></div>');
+    const pools = [["main", "Tableau principal"], ["sec", "Poule secondaire"]];
+    const activePools = pools.filter(([tag]) => ready.some((m) => m.tag === tag));
+    activePools.forEach(([tag, label]) => {
+      const list = ready.filter((m) => m.tag === tag).sort((a, b) => a.round - b.round || a.index - b.index);
+      if (activePools.length > 1) {
+        board.appendChild(el(`<div class="section-title"><h2>${esc(label)}</h2><div class="line"></div></div>`));
       }
-    }
-
-    // Récap des matchs récents du joueur
-    const hist = Store.allMatches(t).filter((m) => m.status === "done" && (m.p1 === selectedPid || m.p2 === selectedPid));
-    if (hist.length) {
-      const h = el('<div style="margin-top:20px"></div>');
-      h.appendChild(el('<div class="section-title"><h2 style="font-size:1.2rem">Vos matchs</h2><div class="line"></div></div>'));
-      hist.forEach((m) => {
-        const mine = m.p1 === selectedPid ? m.score1 : m.score2;
-        const opp = m.p1 === selectedPid ? m.score2 : m.score1;
-        const oppId = m.p1 === selectedPid ? m.p2 : m.p1;
-        const won = m.winner === selectedPid;
-        h.appendChild(el(`<div class="info-banner ${won ? "ok" : ""}" style="margin:8px 0">
-          <span class="ico">${won ? "✓" : "✕"}</span>
-          <div>vs <strong>${esc(Store.playerName(t, oppId))}</strong> — ${mine}–${opp} ${won ? "(victoire)" : "(défaite)"}</div>
-        </div>`));
-      });
-      wiz.appendChild(h);
-    }
-
-    $app.appendChild(wiz);
+      const grid = el('<div class="match-list"></div>');
+      list.forEach((m) => grid.appendChild(matchCard(t, m)));
+      board.appendChild(grid);
+    });
+    $app.appendChild(board);
   }
 
-  function renderScoreForm(t, m, selectedPid) {
-    const wrap = el('<div></div>');
-    const pts = Store.pointsForRound(t, m.round);
-    const tag = m.tag === "sec" ? "Poule secondaire" : "Tableau principal";
-    wrap.appendChild(el(`<div class="info-banner"><span class="ico">🎯</span>
-      <div><strong>${esc(tag)} — Manche ${m.round}</strong>${pts ? ` · match en ${pts} points` : ""}<br/>
-      <span class="muted">Saisissez le score final de votre match.</span></div></div>`));
-
+  function matchCard(t, m) {
     const n1 = Store.playerName(t, m.p1), n2 = Store.playerName(t, m.p2);
+    const pts = Store.pointsForRound(t, m.round);
+    const b = m.tag === "sec" ? t.secondary : t.bracket;
+    const card = el(`<button class="match-card">
+      <div class="mc-tag">${esc(roundLabel(b, m.round))}${pts ? ` · ${pts} pts` : ""}</div>
+      <div class="mc-players">
+        <span class="mc-p">${esc(n1)}</span>
+        <span class="mc-vs">VS</span>
+        <span class="mc-p">${esc(n2)}</span>
+      </div>
+      <div class="mc-cta">Saisir le score ›</div>
+    </button>`);
+    card.onclick = () => openScoreModal(t, m);
+    return card;
+  }
+
+  function openScoreModal(t, m) {
+    const pts = Store.pointsForRound(t, m.round);
+    const b = m.tag === "sec" ? t.secondary : t.bracket;
+    const pool = m.tag === "sec" ? "Poule secondaire" : "Tableau principal";
+    const n1 = Store.playerName(t, m.p1), n2 = Store.playerName(t, m.p2);
+
+    const banner = el(`<div class="info-banner"><span class="ico">🎯</span>
+      <div><strong>${esc(pool)} — ${esc(roundLabel(b, m.round))}</strong>${pts ? ` · match en ${pts} points` : ""}<br/>
+      <span class="muted">Saisissez le score final du match.</span></div></div>`);
+
     const summary = el(`<div class="match-summary">
       <div class="vs-side"><div class="pname">${esc(n1)}</div></div>
       <div class="vs-mid">VS</div>
@@ -544,34 +555,75 @@
     if (pts) { s1.placeholder = "0–" + pts; s2.placeholder = "0–" + pts; }
     summary.children[0].appendChild(s1);
     summary.children[2].appendChild(s2);
-    wrap.appendChild(summary);
 
-    const save = el('<button class="btn" style="width:100%">Enregistrer le résultat</button>');
-    save.onclick = () => {
+    const submit = (close) => {
       const r = Store.recordScore(t.id, m.id, s1.value, s2.value);
       if (r.error) { toast(r.error, "err"); return; }
+      close();
       toast("Résultat enregistré ✓");
-      // Affiche le prochain match du joueur sélectionné
-      renderScoreStep(t, selectedPid);
-      showNextMatchInfo(t, selectedPid);
+      render();                 // rafraîchit la liste des matchs en cours
+      showOutcomeModal(t, m);   // m contient désormais winner/loser/scores
     };
-    wrap.appendChild(save);
-    return wrap;
+    s2.addEventListener("keydown", (e) => { if (e.key === "Enter") { const ov = s2.closest(".modal-overlay"); submit(() => ov && ov.remove()); } });
+
+    modal({
+      title: "Saisie du résultat",
+      bodyNodes: [banner, summary],
+      actions: [
+        { label: "Annuler", cls: "subtle", onClick: (c) => c() },
+        { label: "Enregistrer", onClick: submit },
+      ],
+    });
   }
 
-  function showNextMatchInfo(t, pid) {
-    const next = Store.findReadyMatchForPlayer(t, pid);
-    const wiz = $app.querySelector(".wizard");
-    if (!wiz) return;
-    if (next) {
-      const oppId = next.p1 === pid ? next.p2 : next.p1;
-      const pts = Store.pointsForRound(t, next.round);
-      const card = el(`<div class="next-match-card">
-        <div class="muted">Match suivant — Manche ${next.round}${pts ? ` (${pts} pts)` : ""}</div>
-        <div class="big">vs ${esc(Store.playerName(t, oppId))}</div>
-      </div>`);
-      wiz.appendChild(card);
+  /** Après un score : indique où va chaque joueur (vainqueur / perdant). */
+  function showOutcomeModal(t, m) {
+    const winnerId = m.winner, loserId = m.loser;
+    const wName = Store.playerName(t, winnerId), lName = Store.playerName(t, loserId);
+    const ws = Math.max(m.score1, m.score2), ls = Math.min(m.score1, m.score2);
+
+    const body = el('<div class="outcome"></div>');
+    body.appendChild(el(`<div class="outcome-head">
+      <div class="ico">🏁</div>
+      <div class="big">${esc(wName)} l'emporte</div>
+      <div class="score">${ws}–${ls} contre ${esc(lName)}</div>
+    </div>`));
+    body.appendChild(destinationRow(t, winnerId, "winner"));
+    body.appendChild(destinationRow(t, loserId, "loser"));
+
+    modal({
+      title: "Résultat enregistré",
+      bodyNodes: [body],
+      actions: [{ label: "Terminé", onClick: (c) => c() }],
+    });
+  }
+
+  /** Ligne « où va ce joueur ensuite » dans le récap de résultat. */
+  function destinationRow(t, pid, role) {
+    const name = Store.playerName(t, pid);
+
+    if (isPlayerChampion(t, pid)) {
+      return el(`<div class="dest win"><div class="dico">🏆</div>
+        <div><strong>${esc(name)}</strong><br/><span>Remporte le tournoi !</span></div></div>`);
     }
+
+    const ready = Store.findReadyMatchForPlayer(t, pid);
+    if (ready) {
+      const oppId = ready.p1 === pid ? ready.p2 : ready.p1;
+      return el(`<div class="dest ${role === "winner" ? "win" : ""}"><div class="dico">➜</div>
+        <div><strong>${esc(name)}</strong> — ${esc(poolRoundLabel(t, ready))}<br/>
+        <span>Affronte <strong>${esc(Store.playerName(t, oppId))}</strong></span></div></div>`);
+    }
+
+    const pending = Store.findPendingMatchForPlayer(t, pid);
+    if (pending) {
+      return el(`<div class="dest"><div class="dico">⏳</div>
+        <div><strong>${esc(name)}</strong> — ${esc(poolRoundLabel(t, pending))}<br/>
+        <span>En attente de son prochain adversaire</span></div></div>`);
+    }
+
+    return el(`<div class="dest out"><div class="dico">✕</div>
+      <div><strong>${esc(name)}</strong><br/><span>Éliminé du tournoi</span></div></div>`);
   }
 
   function isPlayerChampion(t, pid) {
