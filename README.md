@@ -1,124 +1,112 @@
 # The Travellers — Suivi de Tournois de Backgammon
 
-Application web pour gérer des tournois de backgammon à élimination directe
-au sein du club **The Travellers**.
+Application web pour organiser les tournois de backgammon du club **The Travellers**
+(Paris) : inscriptions, tirage au sort, saisie des scores depuis n'importe quel
+téléphone, et affichage public des tableaux en direct.
 
-- **Hébergement : Vercel** (site statique + fonctions serverless).
-- **Base de données : cloud partagé** (Vercel KV / Redis Upstash) — toutes les
-  données sont en ligne et **partagées en temps réel avec tout le monde**.
-  Les joueurs n'ont **aucun token ni réglage** à saisir : il leur suffit
-  d'ouvrir le lien.
+- **Hébergement : Vercel** (site statique + fonction serverless).
+- **Base de données : cloud partagé** (Vercel KV / Redis Upstash) — tout le monde voit
+  les mêmes données en temps réel. Les joueurs n'ont **aucun réglage** à faire : il
+  leur suffit d'ouvrir le lien.
 
-## Fonctionnalités
+## Format du tournoi
 
-- **Accueil** : liste des tournois, création et suppression.
-- **Tournoi** → 4 sous-pages :
-  - **Joueurs** : liste, ajout / modification / retrait, statistiques
-    (matchs joués, victoires, total de points, différentiel).
-  - **Tableau** : visualisation en arbre à élimination directe. Si une
-    *poule secondaire / repêchage des perdants* est activée, des flèches
-    permettent de changer de vue et un bouton de **rotation automatique**
-    (30 s par défaut) fait défiler les tableaux pour l'affichage public.
-  - **Saisie des scores** : le joueur sélectionne son nom, voit son match
-    en cours (adversaire + nombre de points de la manche), saisit le score,
-    puis l'app affiche son match suivant — ou *« patientez »* si l'adversaire
-    n'a pas encore terminé.
-  - **Réglages** : nombre de joueurs, valeur des manches, règlement,
-    repêchage on/off, poule secondaire on/off, rotation automatique, et
-    état de la base de données partagée.
+Le nombre de joueurs est **libre** (32, 48, 49, 64…).
 
-## Comment fonctionne la base de données partagée
+1. **Phase 1** — tout le monde joue un match (paires tirées au sort). Avec un nombre
+   impair de joueurs, un joueur est exempt et qualifié d'office.
+2. **Tableau final** — élimination directe. Sa taille est la **puissance de 2** juste
+   au-dessus du nombre de qualifiés ; les places manquantes sont comblées par les
+   **meilleurs perdants** de la phase 1 (*repêchage*) : points marqués dans la défaite,
+   puis différentiel, puis tirage au sort.
+   Un match se joue **dès que ses deux adversaires sont connus** — pas d'attente
+   générale ; seuls les matchs contre un repêché attendent la fin de la phase 1.
+3. **Consolante** — tous les perdants non repêchés, en élimination directe (quelques
+   exempts au premier tour si nécessaire pour revenir à une puissance de 2). Elle se
+   crée automatiquement à la fin de la phase 1.
 
-L'application est servie en statique, mais Vercel exécute une petite
-**fonction serverless** (`api/store.js`) qui parle à un magasin **Redis**
-(Vercel KV / Upstash). La **clé secrète reste côté serveur** : contrairement
-à l'ancienne approche par token GitHub, plus rien de sensible n'est exposé
-dans le navigateur.
+| Joueurs | Phase 1 | Tableau final | Repêchés | Consolante |
+|---|---|---|---|---|
+| 48 | 24 matchs | 32 | 8 | 16 |
+| 49 | 24 matchs + 1 exempt | 32 | 7 | 17 |
+| 60 | 30 matchs | 32 | 2 | 28 |
+| 64 | 32 matchs | 32 | — | 32 |
 
-- **Lecture / écriture** : l'app appelle `/api/store`. Tous les visiteurs
-  partagent la même base.
-- **Temps réel** : un compteur de révision est sondé régulièrement ; dès que
-  quelqu'un enregistre un score, les autres écrans se rafraîchissent tout
-  seuls (idéal pour l'affichage public et la saisie depuis les téléphones).
-- **Mode local de secours** : tant que le magasin n'est pas branché (ou hors
-  ligne), l'app fonctionne en `localStorage` sur l'appareil courant. Dès que
-  le cloud est disponible, les données locales existantes sont **migrées**
-  automatiquement vers le cloud.
+## Utilisation le jour J
 
-## Déploiement sur Vercel
+1. **Joueurs** : coller la liste des inscrits (un nom par ligne), vérifier l'aperçu
+   de la structure, puis **Tirage au sort**.
+2. **Tableau** : à afficher sur l'écran de la salle — plein écran, les deux arbres
+   (principal et consolante) alternent toutes les 20 s et avancent à chaque résultat.
+3. **Scores** : à chaque fin de match, le résultat se saisit en deux gestes
+   (liste « À jouer maintenant »). Une fenêtre indique aussitôt à chacun quoi faire :
+   jouer tout de suite contre tel joueur, attendre un adversaire, attendre le
+   repêchage, ou éliminé.
+4. **Réglages** : points par phase et par tour, consolante, rotation de l'affichage,
+   règlement, corrections de score (avec avertissement si des matchs suivants sont
+   impactés), nouveau tirage.
 
-### 1. Importer le projet
-
-1. Aller sur [vercel.com](https://vercel.com), **Add New… → Project**.
-2. Importer le dépôt GitHub `travellersgames`.
-3. Framework Preset : **Other** (aucune commande de build, aucun dossier de
-   sortie — c'est un site statique avec un dossier `api/`).
-4. **Deploy**. L'app est en ligne (ex. `https://travellersgames.vercel.app`).
-   À ce stade elle fonctionne déjà, en **mode local**.
-
-### 2. Activer la base de données partagée (une seule fois)
-
-1. Dans le projet Vercel → onglet **Storage** → **Create Database** →
-   **KV** (Redis, *Upstash*) → choisir la région et créer.
-2. **Connect** ce magasin au projet. Vercel ajoute automatiquement les
-   variables d'environnement nécessaires
-   (`KV_REST_API_URL`, `KV_REST_API_TOKEN`, …).
-3. **Redeploy** le projet (onglet *Deployments* → *Redeploy*) pour que les
-   variables soient prises en compte.
-
-C'est tout. La pastille en haut à droite passe de **« Local »** à
-**« Cloud »**, et toutes les données deviennent partagées entre tous les
-appareils, en temps réel.
-
-> Variables reconnues : `KV_REST_API_URL` / `KV_REST_API_TOKEN` (Vercel KV)
-> **ou** `UPSTASH_REDIS_REST_URL` / `UPSTASH_REDIS_REST_TOKEN` (Upstash
-> directement). Si l'on préfère créer le magasin sur
-> [upstash.com](https://upstash.com), il suffit d'ajouter ces deux variables
-> dans *Settings → Environment Variables* du projet Vercel, puis de
-> redéployer.
-
-## Structure
+## Architecture
 
 ```
 index.html          Coquille de l'application
-assets/style.css    Charte graphique The Travellers (marine / or / crème)
+assets/style.css    Charte graphique (crème / encre / or)
 assets/logo.svg     Blason du club
-js/store.js         Modèle de données + logique de tournoi (bracket)
-js/cloud.js         Synchro cloud partagée (appels à /api/store)
-js/app.js           Routeur SPA + rendu des vues
+js/store.js         Moteur de tournoi (état recalculé à partir du tirage et des scores)
+js/cloud.js         Synchro cloud temps réel (file d'envoi persistée, hors-ligne toléré)
+js/app.js           Routeur SPA + vues (arbres plein écran, saisie, réglages)
 api/store.js        Fonction serverless : base de données Redis (Vercel KV)
-vercel.json         Configuration Vercel (routage / en-têtes de cache)
+vercel.json         Configuration Vercel (en-têtes de cache)
 ```
 
-## API interne (`/api/store`)
+**Fiabilité de la saisie simultanée.** La structure d'un tournoi (joueurs, réglages,
+tirage) et ses scores sont stockés séparément : **un enregistrement par match**. Deux
+résultats saisis au même moment sur deux téléphones ne peuvent donc jamais s'écraser.
+Tout l'état du tournoi (qui joue contre qui, repêchés, consolante, champion) est
+recalculé de façon déterministe à partir du tirage et des scores ; un score devenu
+obsolète (correction en amont, nouveau tirage) est simplement ignoré. Un score saisi
+sans réseau est mis en file et envoyé dès le retour de la connexion.
 
-| Méthode | Corps / Query                     | Effet                                   |
-|---------|-----------------------------------|-----------------------------------------|
-| `GET`   | `?meta=1`                         | `{ configured, rev }` (sondage léger)   |
-| `GET`   | —                                 | `{ configured, rev, tournaments }`      |
-| `POST`  | `{ op:"upsert", tournament }`     | Crée / met à jour un tournoi            |
-| `POST`  | `{ op:"delete", id }`             | Supprime un tournoi                     |
-| `POST`  | `{ op:"replaceAll", tournaments }`| Remplace toute la base (migration)      |
+### Redis
 
-Si aucune variable d'environnement n'est configurée, l'API répond
-`{ configured:false }` et l'app reste en mode local.
+| Clé | Contenu |
+|---|---|
+| `tg:ids` | ensemble des identifiants de tournois |
+| `tg:t:<id>` | structure d'un tournoi (JSON, sans les scores) |
+| `tg:s:<id>` | hash `matchId → score` |
+| `tg:rev` | compteur incrémenté à chaque écriture (rafraîchissement temps réel) |
+
+### API interne (`/api/store`)
+
+| Méthode | Corps / Query | Effet |
+|---|---|---|
+| `GET` | `?meta=1` | `{ configured, rev }` (sondage léger) |
+| `GET` | — | `{ configured, rev, tournaments }` (structures + scores) |
+| `POST` | `{ op:"upsert", tournament }` | crée / met à jour la structure |
+| `POST` | `{ op:"delete", id }` | supprime un tournoi et ses scores |
+| `POST` | `{ op:"score", tid, matchId, record }` | enregistre un score |
+| `POST` | `{ op:"unscore", tid, matchId }` | efface un score |
+| `POST` | `{ op:"resetScores", tid, keepDraw }` | purge les scores d'un ancien tirage |
+| `POST` | `{ op:"replaceAll", tournaments }` | remplace toute la base |
+
+## Déploiement sur Vercel
+
+1. [vercel.com](https://vercel.com) → **Add New… → Project** → importer le dépôt,
+   Framework Preset **Other** (aucun build).
+2. Onglet **Storage** → **Create Database** → **Upstash for Redis** → **Connect** au
+   projet (laisser le préfixe vide), puis **Redeploy**.
+3. La pastille en haut à droite passe de **« Local »** à **« Cloud »**.
+
+La production est déployée depuis la branche `main`.
+
+> Variables reconnues : `KV_REST_API_URL` / `KV_REST_API_TOKEN` (Vercel KV) ou
+> `UPSTASH_REDIS_REST_URL` / `UPSTASH_REDIS_REST_TOKEN`, ou toute paire préfixée
+> `*_REST_*_URL` / `*_REST_*_TOKEN` (le jeton en lecture seule est ignoré).
 
 ## Développement local
 
-Site statique : on peut le servir avec n'importe quel serveur statique
-(les appels `/api/*` renvoient alors 404 → l'app bascule simplement en mode
-local) :
-
 ```bash
-python3 -m http.server 8080
-# puis http://localhost:8080
-```
-
-Pour tester **aussi les fonctions serverless et le cloud en local**, utiliser
-la CLI Vercel :
-
-```bash
-npm i -g vercel
-vercel dev
-# renseigner au besoin KV_REST_API_URL / KV_REST_API_TOKEN dans un .env.local
+python3 -m http.server 8080      # mode local (sans cloud)
+# ou, avec les fonctions serverless :
+npm i -g vercel && vercel dev
 ```
