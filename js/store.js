@@ -33,8 +33,12 @@
 
   let DB = { tournaments: [] };
   const listeners = [];
+  const storageListeners = [];
+  let storageError = null;
   let epoch = 0;                         // invalide le cache des états
   const cache = new WeakMap();           // t -> { epoch, state }
+  const ID_RX = /^[A-Za-z0-9_-]{1,80}$/;
+  const NAME_MAX = 80;
 
   // ---------- Utilitaires ----------
   function uid(prefix) {
@@ -81,8 +85,18 @@
     return DB;
   }
   function persistLocal() {
-    try { localStorage.setItem(LS_KEY, JSON.stringify(DB)); } catch (e) { console.warn(e); }
+    try {
+      localStorage.setItem(LS_KEY, JSON.stringify(DB));
+      storageError = null;
+    } catch (e) {
+      console.warn(e);
+      storageError = e;
+      storageListeners.forEach((fn) => { try { fn(e); } catch (x) {} });
+    }
   }
+  /** Prévenu si le navigateur refuse d'enregistrer (mémoire pleine, mode privé…). */
+  function onStorageError(fn) { storageListeners.push(fn); }
+  function getStorageError() { return storageError; }
   function emit() {
     epoch++;
     listeners.forEach((fn) => { try { fn(DB); } catch (e) { console.error(e); } });
@@ -132,14 +146,19 @@
 
   /** Convertit n'importe quel tournoi (ancien format compris) en v2. */
   function migrate(t) {
-    if (!t || typeof t !== "object" || !t.id) return null;
+    if (!t || typeof t !== "object" || typeof t.id !== "string" || !ID_RX.test(t.id)) return null;
     if (t.v === VERSION) {
-      t.name = t.name || "Tournoi";
+      t.name = cleanName(t.name, "Tournoi");
+      t.date = typeof t.date === "string" ? t.date.slice(0, 32) : "";
+      t.createdAt = Number(t.createdAt) || 0;
+      t.updatedAt = Number(t.updatedAt) || t.createdAt || 0;
       t.settings = normSettings(t.settings);
-      t.players = Array.isArray(t.players) ? t.players.filter((p) => p && p.id).map(normPlayer) : [];
-      t.scores = (t.scores && typeof t.scores === "object" && !Array.isArray(t.scores)) ? t.scores : {};
-      if (t.draw && (!Array.isArray(t.draw.p1) || !Array.isArray(t.draw.slots))) t.draw = null;
-      if (!t.draw) t.draw = null;
+      const seen = {};
+      t.players = (Array.isArray(t.players) ? t.players : [])
+        .filter((p) => p && typeof p.id === "string" && ID_RX.test(p.id) && !seen[p.id] && (seen[p.id] = true))
+        .map(normPlayer);
+      t.scores = cleanScores(t.scores);
+      t.draw = cleanDraw(t.draw);
       return t;
     }
     // Ancien format (v1) : on garde nom, date, joueurs, règlement.
@@ -150,21 +169,82 @@
       if (r1 && r1.points) s.pointsPhase1 = posInt(r1.points, s.pointsPhase1);
     }
     if (typeof old.rules === "string" && old.rules.trim()) s.rules = old.rules;
+    const seen = {};
     return {
       v: VERSION,
       id: t.id,
-      name: t.name || "Tournoi",
-      date: t.date || new Date().toISOString().slice(0, 10),
-      createdAt: t.createdAt || Date.now(),
-      updatedAt: t.updatedAt || t.createdAt || Date.now(),
+      name: cleanName(t.name, "Tournoi"),
+      date: typeof t.date === "string" ? t.date.slice(0, 32) : "",
+      createdAt: Number(t.createdAt) || 0,
+      updatedAt: Number(t.updatedAt) || Number(t.createdAt) || 0,
       settings: s,
-      players: (Array.isArray(t.players) ? t.players : []).filter((p) => p && p.id).map(normPlayer),
+      players: (Array.isArray(t.players) ? t.players : [])
+        .filter((p) => p && typeof p.id === "string" && ID_RX.test(p.id) && !seen[p.id] && (seen[p.id] = true))
+        .map(normPlayer),
       draw: null,
       scores: {},
     };
   }
+  function cleanName(v, def) {
+    const s = String(v == null ? "" : v).replace(/\s+/g, " ").trim().slice(0, NAME_MAX);
+    return s || def;
+  }
   function normPlayer(p) {
-    return { id: p.id, name: String(p.name || "Joueur").trim() || "Joueur", club: p.club || "", rating: p.rating || "", note: p.note || "" };
+    return {
+      id: p.id,
+      name: cleanName(p.name, "Joueur"),
+      club: String(p.club || "").slice(0, NAME_MAX),
+      rating: String(p.rating || "").slice(0, 20),
+      note: String(p.note || "").slice(0, 500),
+    };
+  }
+  function cleanScores(sc) {
+    const out = {};
+    if (!sc || typeof sc !== "object" || Array.isArray(sc)) return out;
+    Object.keys(sc).forEach((k) => {
+      const r = sc[k];
+      if (!ID_RX.test(k) || !r || typeof r !== "object") return;
+      const s1 = Number(r.s1), s2 = Number(r.s2);
+      if (!Number.isInteger(s1) || !Number.isInteger(s2) || s1 < 0 || s2 < 0 || s1 > 99 || s2 > 99) return;
+      out[k] = { s1, s2, p1: String(r.p1 || ""), p2: String(r.p2 || ""), draw: String(r.draw || ""), at: Number(r.at) || 0 };
+    });
+    return out;
+  }
+  /** Tirage validé (forme stricte) — sinon null. Protège contre des données injectées. */
+  function cleanDraw(d) {
+    if (!d || typeof d !== "object") return null;
+    if (typeof d.id !== "string" || !ID_RX.test(d.id)) return null;
+    if (!Array.isArray(d.p1) || !Array.isArray(d.slots)) return null;
+    const isPid = (x) => typeof x === "string" && ID_RX.test(x);
+    const p1 = [], p1ids = {};
+    for (const m of d.p1) {
+      if (!m || typeof m.id !== "string" || !ID_RX.test(m.id) || p1ids[m.id] || !isPid(m.a) || !isPid(m.b)) return null;
+      p1ids[m.id] = true;
+      p1.push({ id: m.id, a: m.a, b: m.b });
+    }
+    const P = d.slots.length;
+    if (P < 1 || (P & (P - 1)) !== 0) return null;
+    const slots = [];
+    for (const sl of d.slots) {
+      if (!sl || typeof sl !== "object") return null;
+      if (sl.kind === "match" && typeof sl.ref === "string" && p1ids[sl.ref]) slots.push({ kind: "match", ref: sl.ref });
+      else if (sl.kind === "bye" && isPid(sl.pid)) slots.push({ kind: "bye", pid: sl.pid });
+      else if (sl.kind === "rep" && Number.isInteger(sl.k) && sl.k >= 1 && sl.k <= P) slots.push({ kind: "rep", k: sl.k });
+      else return null;
+    }
+    const nums = (o) => {
+      const r = {};
+      if (o && typeof o === "object") Object.keys(o).forEach((k) => { if (ID_RX.test(k) && Number.isFinite(Number(o[k]))) r[k] = Number(o[k]); });
+      return r;
+    };
+    const reps = slots.filter((s) => s.kind === "rep").length;
+    return {
+      id: d.id, at: Number(d.at) || 0,
+      n: Number.isInteger(d.n) ? d.n : p1.length * 2 + (isPid(d.exempt) ? 1 : 0),
+      size: P, qualifiers: P - reps, repechage: reps,
+      p1, exempt: isPid(d.exempt) ? d.exempt : null, slots,
+      tiebreak: nums(d.tiebreak), consOrder: nums(d.consOrder),
+    };
   }
 
   // ============================================================
@@ -180,7 +260,7 @@
     const t = {
       v: VERSION,
       id: uid("trn"),
-      name: (name || "").trim() || "Nouveau tournoi",
+      name: cleanName(name, "Nouveau tournoi"),
       date: date || new Date().toISOString().slice(0, 10),
       createdAt: now,
       updatedAt: now,
@@ -199,7 +279,7 @@
     const t = getTournament(id);
     if (!t) return null;
     patch = patch || {};
-    if (patch.name != null) t.name = String(patch.name).trim() || t.name;
+    if (patch.name != null) t.name = cleanName(patch.name, t.name);
     if (patch.date != null) t.date = patch.date;
     if (patch.settings) t.settings = normSettings(Object.assign({}, t.settings, patch.settings));
     touch(t);
@@ -221,7 +301,7 @@
     const t = getTournament(tid);
     if (!t) return { error: "Tournoi introuvable." };
     if (t.draw) return { error: DRAWN_MSG };
-    name = String(name || "").trim();
+    name = cleanName(name, "");
     if (!name) return { error: "Le nom est requis." };
     const p = normPlayer(Object.assign({}, extra || {}, { id: uid("ply"), name }));
     t.players.push(p);
@@ -235,7 +315,7 @@
     if (!t) return { error: "Tournoi introuvable." };
     if (t.draw) return { error: DRAWN_MSG };
     const list = (Array.isArray(names) ? names : String(names || "").split(/\r?\n/))
-      .map((n) => String(n || "").replace(/^\s*\d+[.)-]\s*/, "").trim())
+      .map((n) => cleanName(String(n || "").replace(/^\s*\d+[.)-]\s*/, ""), ""))
       .filter(Boolean);
     list.forEach((name) => t.players.push(normPlayer({ id: uid("ply"), name })));
     if (list.length) { touch(t); commit("ajout joueurs"); }
@@ -248,11 +328,12 @@
     const p = t.players.find((x) => x.id === pid);
     if (!p) return { error: "Joueur introuvable." };
     if (patch && patch.name != null) {
-      const n = String(patch.name).trim();
+      const n = cleanName(patch.name, "");
       if (!n) return { error: "Le nom est requis." };
       p.name = n;
     }
     ["club", "rating", "note"].forEach((k) => { if (patch && patch[k] != null) p[k] = String(patch[k]); });
+    Object.assign(p, normPlayer(p));
     touch(t); commit("maj joueur");
     return { ok: true, player: p };
   }
@@ -449,10 +530,46 @@
     st.main.size = P; st.main.totalRounds = K;
     const p1ById = {}; p1.forEach((m) => { p1ById[m.id] = m; });
 
+    // Placement des repêchés sur les places réservées : par ordre de classement,
+    // en évitant qu'un repêché retombe sur le joueur qui vient de le battre.
+    const repAssign = {};                    // k -> pid
+    if (p1Done && picks.length) {
+      const repSlots = [];
+      d.slots.forEach((sl, j) => { if (sl.kind === "rep") repSlots.push({ j, k: sl.k }); });
+      repSlots.sort((a, b) => a.k - b.k);
+      const conqueror = {};
+      p1.forEach((m) => { if (m.status === "done") conqueror[m.loser] = m.winner; });
+      const opponentAt = (j) => {
+        const sl = d.slots[j ^ 1];
+        if (!sl) return null;
+        if (sl.kind === "match") { const pm = p1ById[sl.ref]; return pm && pm.status === "done" ? pm.winner : null; }
+        if (sl.kind === "bye") return sl.pid;
+        return null;
+      };
+      const forbid = (pid, r) => !!pid && !!conqueror[pid] && opponentAt(r.j) === conqueror[pid];
+      const assign = repSlots.map(() => null);
+      picks.forEach((pid) => {
+        let i = repSlots.findIndex((r, idx) => assign[idx] === null && !forbid(pid, r));
+        if (i < 0) i = assign.findIndex((x) => x === null);
+        if (i >= 0) assign[i] = pid;
+      });
+      for (let i = 0; i < assign.length; i++) {
+        if (!forbid(assign[i], repSlots[i])) continue;
+        for (let j = 0; j < assign.length; j++) {
+          if (j !== i && !forbid(assign[i], repSlots[j]) && !forbid(assign[j], repSlots[i])) {
+            const x = assign[i]; assign[i] = assign[j]; assign[j] = x;
+            break;
+          }
+        }
+      }
+      repSlots.forEach((r, idx) => { if (assign[idx]) repAssign[r.k] = assign[idx]; });
+    }
+    st.repechage.assign = repAssign;
+
     st.leaves = d.slots.map((sl, i) => {
       if (sl.kind === "match") return { kind: "match", slot: i, match: p1ById[sl.ref] };
       if (sl.kind === "bye") return { kind: "exempt", slot: i, pid: sl.pid };
-      return { kind: "rep", slot: i, k: sl.k, pid: p1Done ? (picks[sl.k - 1] || null) : null };
+      return { kind: "rep", slot: i, k: sl.k, pid: p1Done ? (repAssign[sl.k] || null) : null };
     });
 
     if (P >= 2) {
@@ -471,7 +588,7 @@
             m["p" + slotNo] = sl.pid;
           } else {
             m["src" + slotNo] = { type: "rep", k: sl.k };
-            m["p" + slotNo] = p1Done ? (picks[sl.k - 1] || "BYE") : null;
+            m["p" + slotNo] = p1Done ? (repAssign[sl.k] || "BYE") : null;
           }
         });
         settle(m);
@@ -621,12 +738,13 @@
     if (s1 > 99 || s2 > 99) return { error: "Score trop élevé." };
     if (s1 === s2) return { error: "Pas d'égalité possible au backgammon." };
 
-    const rec = { s1, s2, p1: m.p1, p2: m.p2, draw: t.draw.id, at: Date.now() };
+    const prev = t.scores && t.scores[matchId];
+    const rec = { s1, s2, p1: m.p1, p2: m.p2, draw: t.draw.id, at: Math.max(Date.now(), prev && prev.draw === t.draw.id ? (prev.at || 0) + 1 : 0) };
     t.scores = t.scores || {};
     t.scores[matchId] = rec;
     persistLocal();
     emit();
-    if (cloudOn() && TG.Cloud.pushScore) TG.Cloud.pushScore(t.id, matchId, rec);
+    if (cloudOn() && TG.Cloud.pushScore) TG.Cloud.pushScore(t.id, matchId, rec, { overwrite: !!opts.overwrite });
     const after = state(t);
     return { ok: true, outcome: outcomeOf(t, before, after, matchId) };
   }
@@ -650,6 +768,47 @@
     delete clone.scores[matchId];
     const sim = computeState(clone);
     return cur.all.filter((m) => m.id !== matchId && !m.bye && m.status === "done" && !(sim.byId[m.id] && sim.byId[m.id].status === "done" && sim.byId[m.id].winner === m.winner));
+  }
+
+  /**
+   * Simule une correction (s1/s2) ou un effacement (s1 = null) et décrit
+   * TOUT ce qui changerait : réouverture de la phase 1, repêchés sortants /
+   * entrants, consolante créée / retirée / redistribuée, matchs déjà joués
+   * qui ne compteraient plus, matchs à jouer qui changeraient d'adversaire.
+   */
+  function simulate(t, matchId, s1, s2) {
+    const cur = state(t);
+    const empty = { none: true, phase1Reopened: false, phase1Completed: false, picksOut: [], picksIn: [], consolanteRemoved: false, consolanteCreated: false, consolanteChanged: false, cancelled: [], reassigned: [], winnerChanged: false, championChanged: false };
+    if (!cur || !cur.drawn) return empty;
+    const m = cur.byId[matchId];
+    const scores = Object.assign({}, t.scores || {});
+    if (s1 == null) delete scores[matchId];
+    else if (m) scores[matchId] = { s1: parseInt(s1, 10), s2: parseInt(s2, 10), p1: m.p1, p2: m.p2, draw: t.draw.id, at: Date.now() };
+    const sim = computeState(Object.assign({}, t, { scores }));
+    const has = (arr, x) => arr.indexOf(x) >= 0;
+    const diff = {
+      phase1Reopened: cur.phase1.done && !sim.phase1.done,
+      phase1Completed: !cur.phase1.done && sim.phase1.done,
+      picksOut: cur.repechage.picks.filter((p) => !has(sim.repechage.picks, p)),
+      picksIn: sim.repechage.picks.filter((p) => !has(cur.repechage.picks, p)),
+      consolanteRemoved: !!cur.consolante && !sim.consolante,
+      consolanteCreated: !cur.consolante && !!sim.consolante,
+      consolanteChanged: !!cur.consolante && !!sim.consolante && JSON.stringify(cur.consolante.entrants) !== JSON.stringify(sim.consolante.entrants),
+      cancelled: cur.all.filter((x) => x.id !== matchId && !x.bye && x.status === "done" &&
+        !(sim.byId[x.id] && sim.byId[x.id].status === "done" && sim.byId[x.id].winner === x.winner)),
+      reassigned: cur.all.filter((x) => {
+        if (x.id === matchId || x.bye || x.status === "done") return false;
+        const y = sim.byId[x.id];
+        if (!(x.p1 || x.p2)) return false;
+        if (!y) return true;
+        return x.p1 !== y.p1 || x.p2 !== y.p2;
+      }).map((x) => ({ match: x, before: [x.p1, x.p2], after: sim.byId[x.id] ? [sim.byId[x.id].p1, sim.byId[x.id].p2] : [null, null] })),
+      winnerChanged: !!(m && m.status === "done" && (!sim.byId[matchId] || sim.byId[matchId].winner !== m.winner)),
+      championChanged: cur.champion !== sim.champion,
+    };
+    diff.none = !diff.phase1Reopened && !diff.picksOut.length && !diff.picksIn.length && !diff.consolanteRemoved &&
+      !diff.consolanteCreated && !diff.consolanteChanged && !diff.cancelled.length && !diff.reassigned.length;
+    return diff;
   }
 
   /** Résumé d'un résultat pour la fenêtre de confirmation. */
@@ -705,7 +864,8 @@
     addPlayer, addPlayers, updatePlayer, removePlayer, playerName,
     plan, drawTournament, resetDraw,
     state, playerStatus, playerStats, roundName,
-    recordScore, clearScore, clearImpact,
+    recordScore, clearScore, clearImpact, simulate,
+    onStorageError, getStorageError,
     replaceAll, importTournament, structureOf, migrate,
     defaultSettings, normSettings,
     // utilitaires (tests)
