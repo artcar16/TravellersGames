@@ -3,6 +3,7 @@
    Design : clair, minimaliste, éditorial. Un seul accent : l'or.
    ============================================================ */
 :root {
+  --topbar-h: 65px;        /* hauteur réelle de la barre du haut (sticky des onglets) */
   --bg:        #FBFAF7;
   --bg-2:      #F4F1EA;
   --surface:   #FFFFFF;
@@ -120,7 +121,7 @@ button { font-family: inherit; cursor: pointer; color: inherit; }
 
 /* ---------- Onglets segmentés ---------- */
 .subtabs {
-  position: sticky; top: 59px; z-index: 30;
+  position: sticky; top: var(--topbar-h); z-index: 30;
   display: flex; gap: 4px; padding: 4px;
   background: var(--bg-2); border: 1px solid var(--line); border-radius: 14px;
   overflow-x: auto; scrollbar-width: none;
@@ -353,7 +354,7 @@ input[type=search] { -webkit-appearance: none; appearance: none; }
 .pl-x:hover { background: var(--danger-tint); color: var(--danger); }
 .list-foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 12px; }
 
-.search-bar { position: sticky; top: 112px; z-index: 20; background: var(--bg); padding: 4px 0; }
+.search-bar { position: sticky; top: calc(var(--topbar-h) + 53px); z-index: 20; background: var(--bg); padding: 4px 0; }
 .search-bar input { background: var(--surface) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='18' height='18' fill='none' stroke='%23B7B2A8' stroke-width='2' stroke-linecap='round'%3E%3Ccircle cx='8' cy='8' r='6'/%3E%3Cpath d='m13 13 4 4'/%3E%3C/svg%3E") no-repeat 14px center; padding-left: 42px; min-height: 48px; border-radius: 13px; }
 .search-bar.inline { position: static; padding: 0 0 10px; background: none; }
 input[type=search]::-webkit-search-cancel-button { -webkit-appearance: none; appearance: none; width: 18px; height: 18px; cursor: pointer;
@@ -595,7 +596,7 @@ body.fullbleed .storage-warn { position: fixed; left: 0; right: 0; top: auto; bo
 .p1-done .chip { font-size: .74rem; padding: 1px 8px; margin: 2px 1px; }
 .p1-done .chip.gold { background: rgba(241,223,175,.16); color: #F1DFAF; }
 
-.celebrate { position: relative; text-align: center; padding: 18px 10px 14px; border-radius: 18px; background: radial-gradient(ellipse at 50% 0%, #FFF7E3 0%, #F3E5C1 100%); border: 1.5px solid var(--gold); overflow: hidden; }
+.celebrate { position: relative; flex-shrink: 0; text-align: center; padding: 18px 10px 14px; border-radius: 18px; background: radial-gradient(ellipse at 50% 0%, #FFF7E3 0%, #F3E5C1 100%); border: 1.5px solid var(--gold); overflow: hidden; }
 .celebrate .crest { margin: 0 auto 6px; width: 74px; height: 74px; position: relative; animation: popin .5s var(--ease); }
 .cel-eyebrow { position: relative; font-size: .72rem; letter-spacing: 2.4px; text-transform: uppercase; color: var(--gold-deep); font-weight: 600; }
 .cel-name { position: relative; font-family: var(--serif); font-size: 2.1rem; font-weight: 700; line-height: 1.1; margin-top: 2px; }
@@ -613,11 +614,11 @@ body.fullbleed .storage-warn { position: fixed; left: 0; right: 0; top: auto; bo
 /* ---------- Toast ---------- */
 .toast-wrap { position: fixed; bottom: max(22px, env(safe-area-inset-bottom)); left: 50%; transform: translateX(-50%); z-index: 200; display: flex; flex-direction: column; gap: 8px; align-items: center; pointer-events: none; width: max-content; max-width: calc(100vw - 24px); }
 /* Un toast ne bloque jamais un tap : seul son bouton (Annuler…) est cliquable. */
-.toast { pointer-events: none; display: flex; align-items: center; gap: 12px; background: var(--ink); color: var(--bg); padding: 11px 16px 11px 18px; border-radius: 999px; box-shadow: var(--shadow); font-size: .9rem; animation: rise .22s var(--ease); transition: opacity .3s, transform .3s; }
+.toast { pointer-events: none; display: flex; align-items: center; gap: 12px; background: var(--ink); color: var(--bg); padding: 11px 16px 11px 18px; border-radius: 18px; box-shadow: var(--shadow); font-size: .9rem; line-height: 1.4; animation: rise .22s var(--ease); transition: opacity .3s, transform .3s; }
 .toast.err { background: var(--danger); }
 .toast.warn { background: #6B4C0F; }
 .toast.out { opacity: 0; transform: translateY(6px); }
-.toast button { pointer-events: auto; border: 0; background: rgba(255,255,255,.16); color: #F1DFAF; min-height: 36px; padding: 6px 14px; border-radius: 999px; font-weight: 600; font-size: .84rem; }
+.toast button { pointer-events: auto; flex: none; border: 0; background: rgba(255,255,255,.16); color: #F1DFAF; min-height: 40px; padding: 8px 16px; border-radius: 999px; font-weight: 600; font-size: .84rem; }
 .toast.out button { pointer-events: none; }
 body.fullbleed .toast-wrap { bottom: 86px; }
 @media (max-width: 640px) {
@@ -674,7 +675,7 @@ body.fullbleed .app { max-width: none; margin: 0; padding: 0; }
 .tc .r.in .s { color: var(--muted); font-weight: 500; font-size: .76em; }
 .tc .r.note .n { font-size: .74em; color: var(--muted); font-style: italic; }
 .tc .r em { font-style: italic; color: var(--muted); font-weight: 400; font-size: .8em; }
-.tc .note { flex: none; font-size: .72em; color: var(--muted); font-style: italic; white-space: nowrap; }
+.tc .r > .note { flex: none; font-size: .72em; color: var(--muted); font-style: italic; white-space: nowrap; }
 .tc.done { background: #FFFEFB; }
 .tc.ready { border-color: var(--gold); box-shadow: 0 0 0 1px var(--gold), 0 6px 16px rgba(176,137,47,.18); }
 /* « À jouer » : étiquette posée AU-DESSUS de la carte (jamais sur le nom) + point pulsant
@@ -788,9 +789,9 @@ body.fullbleed .app { max-width: none; margin: 0; padding: 0; }
   .stat .n { font-size: 1.6rem; }
   .status-label { max-width: 110px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .status-dot { padding: 6px 10px; }
-  .subtabs { top: 57px; }
+  .subtabs { top: var(--topbar-h); }
   .subtabs a { padding: 8px 6px; font-size: .86rem; }
-  .search-bar { top: 108px; }
+  .search-bar { top: calc(var(--topbar-h) + 51px); }
   .card { padding: 16px; }
   .card.flush { padding: 2px 4px; }
   .table th, .table td { padding: 10px 6px; }

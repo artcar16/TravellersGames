@@ -185,17 +185,24 @@
       scores: {},
     };
   }
+  /** Tronque sans jamais couper un emoji (paire de substitution) en deux. */
+  function cut(s, max) {
+    if (s.length <= max) return s;
+    const a = Array.from(s);
+    while (a.length && a.join("").length > max) a.pop();
+    return a.join("");
+  }
   function cleanName(v, def) {
-    const s = String(v == null ? "" : v).replace(/\s+/g, " ").trim().slice(0, NAME_MAX);
+    const s = cut(String(v == null ? "" : v).replace(/\s+/g, " ").trim(), NAME_MAX).trim();
     return s || def;
   }
   function normPlayer(p) {
     return {
       id: p.id,
       name: cleanName(p.name, "Joueur"),
-      club: String(p.club || "").slice(0, NAME_MAX),
-      rating: String(p.rating || "").slice(0, 20),
-      note: String(p.note || "").slice(0, 500),
+      club: cut(String(p.club || ""), NAME_MAX),
+      rating: cut(String(p.rating || ""), 20),
+      note: cut(String(p.note || ""), 500),
     };
   }
   function cleanScores(sc) {

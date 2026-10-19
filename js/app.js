@@ -67,6 +67,11 @@
     const ini = parts[0].split("-").filter(Boolean).map((x) => Array.from(x)[0].toUpperCase() + ".").join("-");
     return ini + " " + parts.slice(1).join(" ");
   }
+  /** « Jean-Christophe Bertrand » → « Bertrand » (nom de famille ; nom entier s'il est seul). */
+  function lastName(name) {
+    const parts = String(name || "").trim().split(/\s+/).filter(Boolean);
+    return parts.length > 1 ? parts.slice(1).join(" ") : (parts[0] || "");
+  }
   // Mesure de texte (canvas) pour adapter les noms à la largeur des cartes de l'arbre.
   let measureCtx = null;
   const measureCache = new Map();
@@ -239,13 +244,13 @@
         return {
           cls: "play", icon: "▶", match: m,
           title: `${pre}Jouez maintenant contre ${N(s.opponent)}`,
-          sub: `Votre adversaire est prêt · ${esc(stageLabel(st, m, true))} · en ${nz(m.points)} points`,
+          sub: `Votre adversaire est prêt · ${esc(stageLabel(st, m, true))} · en ${plural(m.points, "point")}`,
         };
       }
       case "wait": {
         const m = s.match, w = s.waitFor || {};
         const pre = m.stage === "cons" ? "Consolante — " : (picked && ctx.justPicked ? "Repêché ! " : "");
-        const where = `${esc(stageLabel(st, m, true))} · en ${nz(m.points)} points`;
+        const where = `${esc(stageLabel(st, m, true))} · en ${plural(m.points, "point")}`;
         if (w.type === "rep") {
           return { cls: "wait", icon: "⏳", title: `${pre}Attendez la fin de la phase 1 (repêchés)`, sub: `Vous affronterez le repêché n°${nz(w.k)} (meilleur perdant) · ${where}` };
         }
@@ -627,8 +632,16 @@
   /** Re-rendu local après une action (garde la position de défilement). */
   function refresh() { render({ keepScroll: true }); }
 
+  // Premier chargement des données terminé (cloud synchronisé, ou mode local confirmé).
+  let firstSyncDone = false;
   function notFound() {
     document.body.classList.remove("fullbleed");
+    // Pendant le tout premier téléchargement (connexion lente), le tournoi n'est pas
+    // « introuvable » : il n'est pas encore arrivé. La page se redessine à son arrivée.
+    if (!firstSyncDone && cloudStatus() !== "local") {
+      $app.appendChild(el('<div class="empty loading"><div class="ico">⏳</div><h2>Chargement du tournoi…</h2><p>Récupération des données partagées.</p></div>'));
+      return;
+    }
     $app.appendChild(el('<div class="empty"><div class="ico">🔍</div><h2>Tournoi introuvable</h2><p>Il a peut-être été supprimé.</p><a class="btn" href="#/">Retour à l’accueil</a></div>'));
   }
 
@@ -750,8 +763,16 @@
     if (!t.draw) playersBefore(t.id); else playersAfter(t.id);
   });
 
+  /** Tronque à max unités UTF-16 sans jamais couper un emoji / caractère composé en deux. */
+  function cutText(s, max) {
+    s = String(s || "");
+    if (s.length <= max) return s;
+    const a = Array.from(s);
+    while (a.length && a.join("").length > max) a.pop();
+    return a.join("");
+  }
   function cleanNames(text) {
-    return String(text || "").split(/\r?\n/).map((n) => n.replace(/^\s*\d+[.)-]\s*/, "").replace(/\s+/g, " ").trim().slice(0, 80).trim()).filter(Boolean);
+    return String(text || "").split(/\r?\n/).map((n) => cutText(n.replace(/^\s*\d+[.)-]\s*/, "").replace(/\s+/g, " ").trim(), 80).trim()).filter(Boolean);
   }
 
   function playersBefore(tid) {
@@ -898,12 +919,14 @@
         </li>`);
         li.querySelector(".pl-name").onclick = () => openPlayerEdit(t.id, p.id, redraw);
         li.querySelector(".pl-x").onclick = () => {
+          // Garde AVANT le travail (sur un téléphone lent, le re-rendu peut dépasser la fenêtre
+          // de détection) : la liste va remonter sous le doigt, un 2e tap ne doit pas retirer
+          // le joueur suivant.
+          markTransition(600);
           const keep = Object.assign({}, p);
           const r = Store.removePlayer(t.id, p.id);
           if (r.error) { toast(r.error, "err"); return; }
           redraw();
-          // La liste vient de remonter sous le doigt : un 2e tap ne doit pas retirer le joueur suivant.
-          markTransition(600);
           toast(keep.name + " retiré", "", { label: "Annuler", fn: () => { Store.addPlayer(t.id, keep.name, { club: keep.club, rating: keep.rating, note: keep.note }); redraw(); } });
         };
         ol.appendChild(li);
@@ -1098,7 +1121,7 @@
         const row = el(`<button type="button" class="match-row stage-${stg}" data-match="${esc(m.id)}">
           <span class="mr-stage"><span class="stage-chip ${stg}">${esc(m.stage === "p1" && !m.isFinal ? "Phase 1 · " + (nz(m.index) + 1) : stageLabel(st, m))}</span></span>
           <span class="mr-players"><span class="mr-p">${esc(pname(t, m.p1))}</span><span class="mr-p b"><span class="vs">vs</span>${esc(pname(t, m.p2))}</span></span>
-          <span class="mr-pts">en ${nz(m.points)}&nbsp;pts</span>
+          <span class="mr-pts">en ${plural(m.points, "pt").replace(" ", "&nbsp;")}</span>
           <span class="mr-go" aria-hidden="true">›</span>
         </button>`);
         row.onclick = () => openScore(tid, m.id);
@@ -1274,7 +1297,7 @@
     const v = m.status === "done" ? [nz(m.score1), nz(m.score2)] : [0, 0];
     const orig = v.slice();
 
-    const titleHtml = `<div class="sm-stage">${esc(stageLabel(st0, m, true))}</div><h3>${overwrite ? "Corriger le score" : "Saisir le score"}</h3><div class="sm-target">Match en <b>${target}</b> points</div>`;
+    const titleHtml = `<div class="sm-stage">${esc(stageLabel(st0, m, true))}</div><h3>${overwrite ? "Corriger le score" : "Saisir le score"}</h3><div class="sm-target">Match en <b>${nz(target)}</b> ${nz(target) > 1 ? "points" : "point"}</div>`;
     const rows = P.map((pid, i) => el(`<div class="sm-row">
       <div class="sm-name"><span class="nm">${esc(names[i])}</span><span class="win-tag">Vainqueur</span></div>
       <div class="sm-ctrl">
@@ -1476,6 +1499,13 @@
     const tid = t.id;
     const s = t.settings;
     const F = { tid, K, dirty: false, remoteSeen: false, node: null, saving: false };
+    // Valeurs à l'ouverture du formulaire : on n'enregistrera QUE les champs réellement
+    // modifiés ici, pour ne jamais écraser un réglage changé entre-temps sur un autre appareil.
+    const base = {
+      name: t.name, date: t.date || "",
+      pointsPhase1: s.pointsPhase1, mainPoints: s.mainPoints.slice(), consolePoints: s.consolePoints,
+      consolante: !!s.consolante, autoRotate: !!s.autoRotate, rotateSeconds: s.rotateSeconds, rules: s.rules || "",
+    };
     const node = el('<div class="settings-form"><div class="sf-banner" hidden></div></div>');
     F.node = node;
     const banner = node.querySelector(".sf-banner");
@@ -1547,32 +1577,36 @@
       if (F.saving) return;
       const cur = Store.getTournament(tid);
       if (!cur) return;
+      // Patch = uniquement les champs modifiés dans CE formulaire (base = valeurs à l'ouverture).
+      const patch = { settings: {} };
+      const nameV = infoC.querySelector("[name=name]").value, dateV = infoC.querySelector("[name=date]").value;
+      if (nameV !== base.name) patch.name = nameV;
+      if (dateV !== base.date) patch.date = dateV;
+      const setIf = (k, v) => { if (v !== base[k]) patch.settings[k] = v; };
+      setIf("pointsPhase1", fP1.get());
+      setIf("consolePoints", fCons.get());
+      setIf("consolante", fmtC.querySelector("[name=consolante]").checked);
+      setIf("autoRotate", fmtC.querySelector("[name=autoRotate]").checked);
+      setIf("rotateSeconds", fRot.get());
+      setIf("rules", rulesC.querySelector("[name=rules]").value);
       const mp = cur.settings.mainPoints.slice();
-      roundFields.forEach((x) => { mp[x.idx] = x.f.get(); });
-      const patch = {
-        name: infoC.querySelector("[name=name]").value,
-        date: infoC.querySelector("[name=date]").value,
-        settings: {
-          pointsPhase1: fP1.get(), mainPoints: mp, consolePoints: fCons.get(),
-          consolante: fmtC.querySelector("[name=consolante]").checked,
-          autoRotate: fmtC.querySelector("[name=autoRotate]").checked,
-          rotateSeconds: fRot.get(),
-          rules: rulesC.querySelector("[name=rules]").value,
-        },
-      };
+      let mpChanged = false;
+      roundFields.forEach((x) => { const v = x.f.get(); if (v !== base.mainPoints[x.idx]) { mp[x.idx] = v; mpChanged = true; } });
+      if (mpChanged) patch.settings.mainPoints = mp;
+      const nothing = patch.name == null && patch.date == null && !Object.keys(patch.settings).length;
       const doSave = () => {
         F.saving = true;
         saveBtn.disabled = true;
-        Store.updateTournament(tid, patch);
+        if (!nothing) Store.updateTournament(tid, patch);
         F.dirty = false; F.remoteSeen = false;
         if (settingsForm === F) settingsForm = null;
         if (document.activeElement) document.activeElement.blur();
         refresh();
-        toast("Réglages enregistrés ✓");
+        toast(nothing ? "Aucune modification à enregistrer." : "Réglages enregistrés ✓");
       };
       // Couper une consolante déjà lancée : elle disparaît de tous les écrans → confirmation.
       const cst = Store.state(cur);
-      if (cur.settings.consolante !== false && !patch.settings.consolante && cst.consolante) {
+      if (cur.settings.consolante !== false && patch.settings.consolante === false && cst.consolante) {
         const cm = realMatches([].concat.apply([], cst.consolante.rounds));
         const played = countDone(cm), ready = cm.filter((m) => m.status === "ready").length;
         ask({
@@ -1909,10 +1943,19 @@
     if (src.type === "exempt") return pname(t, src.pid);
     if (src.type === "p1" || src.type === "winner") {
       const sm = st.byId[src.matchId];
-      if (sm && sm.p1 && sm.p2 && sm.p1 !== "BYE" && sm.p2 !== "BYE") return "Vainq. " + shortName(pname(t, sm.p1)) + " / " + shortName(pname(t, sm.p2));
+      // Noms de famille : les deux joueurs restent identifiables sur une carte étroite.
+      if (sm && sm.p1 && sm.p2 && sm.p1 !== "BYE" && sm.p2 !== "BYE") return "Vainq. " + lastName(pname(t, sm.p1)) + " / " + lastName(pname(t, sm.p2));
       return "Vainqueur " + arrow;
     }
     return "—";
+  }
+  /** Version complète (infobulle) du libellé d'un siège inconnu. */
+  function tbdTitle(t, st, src) {
+    if (src && (src.type === "p1" || src.type === "winner")) {
+      const sm = st.byId[src.matchId];
+      if (sm && sm.p1 && sm.p2 && sm.p1 !== "BYE" && sm.p2 !== "BYE") return "Vainqueur de " + pname(t, sm.p1) + " – " + pname(t, sm.p2);
+    }
+    return "";
   }
 
   /** Ligne de carte : name/sc sont du HTML déjà échappé. */
@@ -1967,7 +2010,11 @@
         const wTxt = fitName(pname(t, m.winner), left * 0.7, fName(600));
         const wUsed = Math.min(textWidth(wTxt, fName(600)), left * 0.7);
         const lW = left - wUsed;
-        const loser = lW >= 36 ? `<span class="n l">${fit(m.loser, lW, 400)}</span>` : "";
+        // Perdant : nom complet, sinon initiale + nom, sinon nom seul — et s'il ne tient
+        // vraiment pas, on l'omet (il reste dans l'infobulle) plutôt que « M. … ».
+        const lName = pname(t, m.loser);
+        const lFit = [lName, initialsName(lName), lastName(lName)].filter(Boolean).find((c) => textWidth(c, fName(400)) <= lW);
+        const loser = lFit ? `<span class="n l">${esc(lFit)}</span>` : "";
         return { cls, html: `<div class="r one" title="${esc(title)}"><span class="n w">${esc(wTxt)}</span><span class="sc">${sc}</span>${loser}</div>${extra}` };
       }
       const half = (avail - 14 - (ready ? 14 : 0)) / 2;
@@ -1977,7 +2024,7 @@
     const seat = (slot) => {
       const pid = m["p" + slot];
       if (pid === "BYE") return trow("tbd", "Exempt", "");
-      if (!pid) return trow("tbd", esc(tbdLabel(t, st, m["src" + slot], info.arrows[slot - 1])), "");
+      if (!pid) return trow("tbd", esc(tbdLabel(t, st, m["src" + slot], info.arrows[slot - 1])), "", tbdTitle(t, st, m["src" + slot]));
       const c = m.status === "done" ? (m.winner === pid ? "win" : "lose") : "";
       return trow(c, fit(pid, nameW), m.status === "done" ? nz(m["score" + slot]) : "", pname(t, pid));
     };
@@ -2373,7 +2420,7 @@
     });
 
     // Changement venant du cloud : re-rendu sauf pendant une saisie.
-    cloudCall("onRemoteChange", () => { externalChange(); updateSyncPill(); });
+    cloudCall("onRemoteChange", () => { firstSyncDone = true; externalChange(); updateSyncPill(); });
 
     // Mode local : synchronise les onglets d'un même navigateur (affichage public + saisie).
     window.addEventListener("storage", (e) => {
@@ -2392,17 +2439,25 @@
     }
     try { syncStorageWarning(); } catch (e) { /* */ }
 
+    // Coquille hors-ligne : recharger la page sans réseau garde l'application.
+    try {
+      if ("serviceWorker" in navigator && window.isSecureContext) navigator.serviceWorker.register("/sw.js").catch(() => {});
+    } catch (e) { /* navigateur sans service worker */ }
+
     Promise.resolve().then(() => cloudCall("init")).then((mode) => {
       updateSyncPill();
       if (mode === "cloud" || isCloud()) {
         return Promise.resolve(cloudCall("bootSync")).then(() => {
+          firstSyncDone = true;
           externalChange();
           updateSyncPill();
           cloudCall("startPolling");
         });
       }
+      // Mode local confirmé (pas de nouvelle tentative en arrière-plan) : rien à attendre.
+      if (cloudStatus() === "local") { firstSyncDone = true; externalChange(); }
       return null;
-    }).catch((e) => { console.warn("Initialisation cloud :", e); updateSyncPill(); });
+    }).catch((e) => { console.warn("Initialisation cloud :", e); firstSyncDone = true; updateSyncPill(); externalChange(); });
   }
 
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", boot);

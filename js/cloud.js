@@ -77,6 +77,8 @@
   let dirtyCount = 0;
   let opSeq = 0;
   const removedKeys = {};        // ops traitées / remplacées par CET onglet
+  const myScores = {};           // tid -> {matchId: record} saisis par CET appareil (session)
+  const staleWatch = {};         // tid -> échéance : vérifier si nos saisies suivantes sont devenues caduques
 
   let syncTimer = null, retryTimer = null, pollTimer = null, initTimer = null;
   let flushing = null, flushAgain = false;
@@ -805,6 +807,7 @@
     persistSync();
     const changed = differs(localList, out);
     if (changed) TG.Store.replaceAll({ tournaments: out });
+    if (Object.keys(staleWatch).length) checkStale(notes);
     relost.forEach((id) => repushScores(id));
     computeDirty(false);
     emitStatus();
@@ -856,6 +859,9 @@
   function enqueue(op) {
     op.k = newKey();
     if (op.op === "score" || op.op === "unscore") {
+      // Ressaisie après un effacement (ou une correction) encore en file : c'est un
+      // remplacement volontaire → il ne doit pas être refusé comme « déjà saisi ailleurs ».
+      if (op.op === "score" && queue.some((q) => q.tid === op.tid && q.matchId === op.matchId && (q.op === "unscore" || (q.op === "score" && q.overwrite)))) op.overwrite = true;
       dropWhere((q) => (q.op === "score" || q.op === "unscore") && q.tid === op.tid && q.matchId === op.matchId);
     } else if (op.op === "resetScores") {
       dropWhere((q) => q.tid === op.tid && (
@@ -906,8 +912,34 @@
     if (seen != null && !(rec.at > seen)) rec.at = seen + 1;
     const op = { op: "score", tid, matchId, record: rec };
     if (opts && opts.overwrite) op.overwrite = true;
+    (myScores[tid] = myScores[tid] || {})[matchId] = rec;
     enqueue(op);
     kick();
+  }
+
+  /**
+   * Après un conflit (notre résultat d'un match a été écarté), les matchs SUIVANTS que
+   * nous avions saisis peuvent ne plus compter (leurs joueurs ont changé). On le signale
+   * explicitement au lieu de les laisser disparaître sans un mot.
+   */
+  function checkStale(notes) {
+    const now = Date.now();
+    Object.keys(staleWatch).forEach((tid) => {
+      if (staleWatch[tid] < now) { delete staleWatch[tid]; return; }
+      const t = TG.Store.getTournament(tid), mine = myScores[tid];
+      if (!t || !mine) return;
+      const st = TG.Store.state(t);
+      const lost = Object.keys(mine).filter((mid) => {
+        const m = st.byId[mid], rec = t.scores && t.scores[mid], my = mine[mid];
+        return m && m.staleScore && rec && rec.s1 === my.s1 && rec.s2 === my.s2 && rec.p1 === my.p1 && rec.p2 === my.p2;
+      });
+      if (!lost.length) return;
+      delete staleWatch[tid];
+      const txt = lost.map((mid) => scoreText(t, mine[mid])).join(" ; ");
+      lost.forEach((mid) => { delete mine[mid]; });
+      notes.push({ kind: "conflict", tid, message: (lost.length > 1 ? lost.length + " de vos saisies suivantes ne comptent plus" : "Votre saisie suivante ne compte plus") +
+        " (" + txt + ") : un résultat précédent a été retenu différemment sur un autre appareil. Vérifiez ces matchs et ressaisissez-les si besoin." });
+    });
   }
   function pushUnscore(tid, matchId) {
     if (typeof tid !== "string" || typeof matchId !== "string") return;
@@ -1097,6 +1129,7 @@
     }
     refresh(tid);
     if (op.op !== "score") return;
+    if (r.ignored === "exists" || r.ignored === "older") staleWatch[tid] = Date.now() + 120000;
     const t = TG.Store.getTournament(tid);
     const mine = op.record;
     const flip = !!(r.current && r.current.p1 === mine.p2 && r.current.p2 === mine.p1);
