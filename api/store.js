@@ -23,7 +23,7 @@
      GET  /api/store?meta=1  -> { configured, rev }          (sondage léger)
      GET  /api/store         -> { configured, rev, tournaments:[{...structure, scores}] }
      POST /api/store
-       { op:"upsert", tournament }             structure (scores retirés)
+       { op:"upsert", tournament, baseUpdatedAt? }  structure (scores retirés)
        { op:"delete", id }                     structure + scores
        { op:"score", tid, matchId, record }    un score
        { op:"unscore", tid, matchId, draw?, at? }
@@ -33,6 +33,10 @@
         a été volontairement écartée, voir ci-dessous)
 
    Garde-fous (jamais de perte d'un score valide) :
+     - upsert : si `baseUpdatedAt` est fourni et que la structure stockée a
+       un autre updatedAt, quelqu'un a écrit entre-temps → rien n'est écrit
+       (ignored:"conflict") ; le client recharge, fusionne et renvoie.
+       Lecture + écriture sous un verrou court (SET NX PX) par tournoi.
      - score : un enregistrement plus ANCIEN (même tirage, `at` plus petit)
        n'écrase pas le plus récent ; un enregistrement d'un autre tirage
        n'écrase jamais un score du tirage courant.
@@ -82,6 +86,8 @@ const K_IDS = "tg:ids";
 const K_REV = "tg:rev";
 const kT = (id) => "tg:t:" + id;
 const kS = (id) => "tg:s:" + id;
+const kL = (id) => "tg:lk:" + id;   // verrou court (upsert avec contrôle de version)
+const LOCK_MS = 3000;
 
 const ID_RE = /^[A-Za-z0-9_-]{1,80}$/;
 const MAX_STRUCT_CHARS = 900000;     // ~0,9 Mo par tournoi (un tournoi de 128 joueurs ≈ 40 Ko)
@@ -286,14 +292,59 @@ async function readAll() {
 // ---------------------------------------------------------------
 //  Écritures
 // ---------------------------------------------------------------
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * Verrou court par tournoi (SET NX PX) : rend atomique « lire la version
+ * courante → comparer → écrire » même si deux requêtes arrivent ensemble.
+ * Expire seul (3 s) si la fonction s'interrompt.
+ */
+async function withLock(id, fn) {
+  const key = kL(id);
+  const token = Date.now().toString(36) + Math.random().toString(36).slice(2);
+  for (let i = 0; i < 40; i++) {
+    const [got] = await redis([["SET", key, token, "NX", "PX", LOCK_MS]]);
+    if (got === "OK") {
+      try {
+        return await fn();
+      } finally {
+        try {
+          const [cur] = await redis([["GET", key]]);
+          if (cur === token) await redis([["DEL", key]]);
+        } catch (e) { /* le verrou expirera tout seul */ }
+      }
+    }
+    await sleep(40 + Math.floor(Math.random() * 60));
+  }
+  throw new Error("Tournoi momentanément verrouillé, réessayez.");
+}
+
 async function opUpsert(body, res) {
   const s = cleanStructure(body.tournament);
-  const out = await redis([
-    ["SET", kT(s.id), s.json],
-    ["SADD", K_IDS, s.id],
-    ["INCR", K_REV],
-  ]);
-  return done(res, out[2]);
+  const write = async () => {
+    const out = await redis([
+      ["SET", kT(s.id), s.json],
+      ["SADD", K_IDS, s.id],
+      ["INCR", K_REV],
+    ]);
+    return { rev: out[2] };
+  };
+  if (body.baseUpdatedAt == null) {
+    const r = await write();
+    return done(res, r.rev);
+  }
+  // Contrôle de concurrence optionnel : le client indique sur quelle version
+  // (updatedAt) il a basé sa modification ; si quelqu'un a écrit entre-temps,
+  // on n'écrase pas — le client recharge, fusionne et renvoie.
+  if (!isTime(body.baseUpdatedAt)) throw new BadRequest("baseUpdatedAt invalide.");
+  // (le verrou est relâché AVANT de répondre)
+  const r = await withLock(s.id, async () => {
+    const [curJson, rev0] = await redis([["GET", kT(s.id)], ["GET", K_REV]]);
+    const cur = parseJSON(curJson);
+    if (isPlainObject(cur) && cur.updatedAt !== body.baseUpdatedAt) return { rev: rev0, ignored: "conflict" };
+    return write();
+  });
+  return done(res, r.rev, r.ignored);
 }
 
 async function opDelete(body, res) {
@@ -421,6 +472,3 @@ module.exports = async (req, res) => {
     return res.status(500).json({ error: String((e && e.message) || e) });
   }
 };
-
-// Exposé pour les tests uniquement.
-module.exports._internals = { resolveCreds, cleanRecord, cleanStructure, ID_RE };
