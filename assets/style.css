@@ -81,7 +81,7 @@ button { font-family: inherit; cursor: pointer; color: inherit; }
   border-bottom: 1px solid var(--line);
 }
 .brand { display: inline-flex; align-items: center; gap: 11px; min-height: 40px; }
-.brand-logo { width: 34px; height: 34px; display: block; }
+.brand-logo { width: 34px; height: 34px; display: block; border-radius: 8px; }
 .brand-name { font-family: var(--serif); font-weight: 600; font-size: 1.32rem; letter-spacing: .6px; color: var(--ink); }
 
 .status-dot {
@@ -148,7 +148,7 @@ button { font-family: inherit; cursor: pointer; color: inherit; }
 .count-badge { min-width: 26px; height: 22px; padding: 0 8px; border-radius: 999px; background: var(--bg-2); border: 1px solid var(--line); color: var(--ink-2); font-size: .76rem; font-weight: 600; display: inline-grid; place-items: center; font-variant-numeric: tabular-nums; }
 .count-badge.gold { background: var(--gold-deep); border-color: var(--gold-deep); color: #fff; }
 .divider { height: 1px; background: var(--line); margin: 18px 0; border: 0; }
-.crest { width: 64px; height: 64px; display: block; }
+.crest { width: 64px; height: 64px; display: block; border-radius: 22%; box-shadow: 0 4px 14px rgba(5,20,135,.18); }
 
 /* Cartes tournoi (accueil) */
 .t-grid { display: grid; gap: 14px; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); }

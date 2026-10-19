@@ -51,7 +51,7 @@ Le nombre de joueurs est **libre** (32, 48, 49, 64…).
 ```
 index.html          Coquille de l'application
 assets/style.css    Charte graphique (crème / encre / or)
-assets/logo.svg     Blason du club
+icons/              Logo « TC » (favicon, écran d’accueil, en-tête)
 js/store.js         Moteur de tournoi (état recalculé à partir du tirage et des scores)
 js/cloud.js         Synchro cloud temps réel (file d'envoi persistée, hors-ligne toléré)
 js/app.js           Routeur SPA + vues (arbres plein écran, saisie, réglages)

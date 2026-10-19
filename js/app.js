@@ -12,7 +12,7 @@
   const Store = TG.Store;
   const $app = document.getElementById("app");
   const DB_KEY = "tg_backgammon_db_v1";
-  const LOGO = "assets/logo.svg?v=4";
+  const LOGO = "icons/icon-192.png?v=6";
 
   /** Petits états d'interface conservés entre deux rendus. */
   const ui = { q: "", qTid: null, plq: "", corrQ: "", corrAll: false, bulkOpen: false, bulkText: "", addName: "", addTid: null };
