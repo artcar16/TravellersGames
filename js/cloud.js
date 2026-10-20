@@ -33,7 +33,12 @@
    — un score saisi ne « disparaît » donc jamais de l'écran.
 
    Avis à l'utilisateur : TG.Cloud.onNotice(fn) → fn({kind, message, tid?, matchId?})
-   kind ∈ "conflict" | "drawChanged" | "deleted" | "storage" | "info".
+   kind ∈ "conflict" | "drawChanged" | "deleted" | "storage" | "info" | "update".
+
+   Diagnostic : TG.Cloud.getInfo() → { status, pending, lastOkAt, lastError:{kind, http,
+   message, at}, stuck } avec kind ∈ "network" (requête jamais arrivée au serveur),
+   "timeout" (réseau trop lent), "server" (serveur joint mais en panne : message du
+   serveur) ; TG.Cloud.testConnection() → test immédiat (?health=1).
    ============================================================ */
 (function () {
   "use strict";
@@ -50,6 +55,7 @@
   const LS_SYNC = "tg_cloud_sync_v1";  // empreintes du dernier état connu du cloud
   const LS_DEV = "tg_cloud_dev_v1";    // identifiant de cet appareil (auteur des saisies)
   const ID_RX = /^[A-Za-z0-9_-]{1,80}$/;
+  const STUCK_AFTER = 3;         // échecs serveur d'une même op avant de laisser passer les suivantes
 
   let mode = "local";            // local | cloud
   let status = "local";          // local | syncing | connected | error
@@ -92,6 +98,11 @@
   let initRetrying = null;
   let storageWarned = false;
   let deviceId = null;
+  let lastOkAt = 0;              // dernière réponse du serveur (tout statut HTTP < 500)
+  let lastError = null;          // { kind: network|timeout|server, http, message, at }
+  let build = null;              // version déployée vue au démarrage
+  let updateNoticed = false;
+  const opFails = {};            // clé d'op -> échecs serveur (5xx) consécutifs
 
   // ============================================================
   //  Utilitaires
@@ -425,15 +436,34 @@
   // ============================================================
   //  Réseau
   // ============================================================
+  /** Erreur réseau classée (kind, http, message serveur) pour un diagnostic clair. */
+  function netError(kind, http, message) {
+    const e = new Error(message);
+    e.kind = kind; e.http = http || 0;
+    lastError = { kind, http: http || 0, message, at: Date.now() };
+    return e;
+  }
   async function fetchJSON(url, opts, timeoutMs) {
     const ctl = typeof AbortController === "function" ? new AbortController() : null;
-    const timer = ctl ? setTimeout(() => { try { ctl.abort(); } catch (e) { /* */ } }, timeoutMs || TIMEOUT_MS) : null;
+    let timedOut = false;
+    const timer = ctl ? setTimeout(() => { timedOut = true; try { ctl.abort(); } catch (e) { /* */ } }, timeoutMs || TIMEOUT_MS) : null;
     try {
       const o = Object.assign({ cache: "no-store" }, opts || {});
       if (ctl) o.signal = ctl.signal;
-      const r = await fetch(url, o);
+      let r;
+      try { r = await fetch(url, o); }
+      catch (e) {
+        if (timedOut) throw netError("timeout", 0, "Réseau trop lent : le serveur n'a pas répondu à temps.");
+        throw netError("network", 0, "Cet appareil n'arrive pas à joindre le site (pas de réseau, ou réseau qui bloque).");
+      }
       let json = null;
       try { json = await r.json(); } catch (e) { json = null; }
+      if (r.status < 500 && r.status !== 429 && (json || r.ok)) { lastOkAt = Date.now(); lastError = null; }
+      else if (r.status >= 500 || r.status === 429) {
+        const m = json && typeof json.error === "string" && json.error ? json.error : "Le serveur ne répond pas correctement (erreur " + r.status + ").";
+        lastError = { kind: "server", http: r.status, message: m, at: Date.now() };
+      }
+      if (json && json.build !== undefined) noteBuild(json.build);
       return { ok: !!r.ok, status: r.status, json };
     } finally {
       if (timer) clearTimeout(timer);
@@ -441,8 +471,51 @@
   }
   async function getJSON(url, timeoutMs) {
     const r = await fetchJSON(url, { headers: { Accept: "application/json" } }, timeoutMs);
-    if (!r.ok || !r.json) throw new Error("Lecture impossible (" + r.status + ")");
+    if (!r.ok || !r.json) {
+      const e = new Error((r.json && r.json.error) || "Lecture impossible (" + r.status + ")");
+      e.kind = r.status >= 500 || r.status === 429 ? "server" : "http"; e.http = r.status;
+      throw e;
+    }
     return r.json;
+  }
+
+  /** Nouvelle version déployée pendant que l'app est ouverte : on le propose (une fois). */
+  function noteBuild(b) {
+    if (typeof b !== "string" || !b) return;
+    if (build == null) { build = b; return; }
+    if (b !== build && !updateNoticed) {
+      updateNoticed = true;
+      notice("update", "Nouvelle version de l'application disponible.");
+    }
+  }
+
+  /** Test immédiat (bouton « Tester la connexion ») : réseau → serveur → base de données. */
+  async function testConnection() {
+    const t0 = Date.now();
+    let r;
+    try { r = await fetchJSON(API + "?health=1", { headers: { Accept: "application/json" } }, TIMEOUT_MS); }
+    catch (e) { return { ok: false, kind: e.kind || "network", message: e.message, ms: Date.now() - t0 }; }
+    const ms = Date.now() - t0, j = r.json || {};
+    if (r.status === 404 || r.status === 405 || r.status === 501 || j.configured === false) {
+      return { ok: false, kind: "local", message: "Aucune base de données partagée n'est branchée sur ce site (mode local).", ms };
+    }
+    if (!r.ok || !j.ok) {
+      return { ok: false, kind: "server", http: r.status, ms,
+        message: (typeof j.error === "string" && j.error) || "Le serveur ne répond pas correctement (erreur " + r.status + ")." };
+    }
+    // Tout répond : on relance aussitôt la synchro (et la connexion si elle n'était pas établie).
+    failures = 0;
+    if (retryTimer) { clearTimeout(retryTimer); retryTimer = null; }
+    if (connecting) retryInit();
+    else if (mode === "cloud") Promise.resolve(booted ? flush() : null).then(() => checkRemote(true));
+    return { ok: true, ms, redisMs: toNum(j.redisMs) };
+  }
+
+  function stuckCount() {
+    return queue.filter((q) => (opFails[q.k] || 0) >= STUCK_AFTER).length;
+  }
+  function getInfo() {
+    return { status, mode, pending: pendingCount(), lastOkAt, lastError: lastError ? Object.assign({}, lastError) : null, stuck: stuckCount() };
   }
   /** POST : {rev, ignored, rv, prv, current} | {permanent, error} ; lève une erreur si incident passager. */
   async function post(body) {
@@ -454,7 +527,11 @@
     if (r.status === 400 || r.status === 413 || r.status === 422) {
       return { permanent: true, error: (r.json && r.json.error) || ("HTTP " + r.status) };
     }
-    if (!r.ok) throw new Error("Envoi refusé (" + r.status + ")");
+    if (!r.ok) {
+      const e = new Error((r.json && r.json.error) || "Envoi refusé (" + r.status + ")");
+      e.kind = r.status >= 500 || r.status === 429 ? "server" : "http"; e.http = r.status;
+      throw e;
+    }
     if (!r.json || !r.json.configured || !r.json.ok) throw new Error("Cloud indisponible");
     const j = r.json;
     return {
@@ -1153,11 +1230,27 @@
       const blocked = {};
       computeDirty(false).forEach((u) => { blocked[u.id] = true; });
       Object.keys(conflicted).forEach((id) => { blocked[id] = true; });
-      const op = queue.find((q) => q.op === "delete" || !blocked[q.tid]);
+      // Une op que le serveur refuse en boucle (erreur 500) ne bloque plus les
+      // autres : elle passe en dernier (avec celles qui doivent la suivre :
+      // même match, ou purge / suppression du même tournoi), et sera retentée.
+      const held = {}, heldMatch = {}, heldTid = {};
+      queue.forEach((q) => {
+        const mk = q.tid + "\n" + (q.matchId || "");
+        const after = (q.matchId && heldMatch[mk]) || ((q.op === "resetScores" || q.op === "delete") && heldTid[q.tid]);
+        if ((opFails[q.k] || 0) >= STUCK_AFTER || after) { held[q.k] = true; heldMatch[mk] = true; heldTid[q.tid] = true; }
+      });
+      const ready = (q) => q.op === "delete" || !blocked[q.tid];
+      const op = queue.find((q) => ready(q) && !held[q.k]) || queue.find(ready);
       if (!op) return;
       const wire = wireOf(op);
       if (!wire) { removeOp(op.k); continue; }
-      const r = await post(wire);
+      let r;
+      try { r = await post(wire); }
+      catch (e) {
+        if (e && e.kind === "server" && e.http === 500) opFails[op.k] = (opFails[op.k] || 0) + 1;
+        throw e;
+      }
+      delete opFails[op.k];
       removeOp(op.k);
       if (r.permanent) { console.warn("Cloud : opération refusée", wire, r.error); continue; }
       if (op.op === "delete") {
@@ -1191,7 +1284,10 @@
     }
     const r = await flush();
     if (r && r.error) return r;
-    return queue.length ? { error: queue.length + " opération(s) encore en attente." } : { ok: true };
+    if (!queue.length) return { ok: true };
+    const n = stuckCount();
+    return { error: n ? n + " saisie(s) refusée(s) par le serveur" + (lastError && lastError.kind === "server" ? " : " + lastError.message : ".")
+      : queue.length + " opération(s) encore en attente." };
   }
 
   // ============================================================
@@ -1387,6 +1483,6 @@
     scheduleSync, pushPending, pullNow,
     checkRemote, startPolling, stopPolling,
     pushScore, pushUnscore, pushResetScores,
-    pendingCount,
+    pendingCount, getInfo, testConnection,
   };
 })();

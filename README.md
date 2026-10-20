@@ -81,6 +81,7 @@ sans réseau est mis en file et envoyé dès le retour de la connexion.
 | Méthode | Corps / Query | Effet |
 |---|---|---|
 | `GET` | `?meta=1` | `{ configured, rev }` (sondage léger) |
+| `GET` | `?health=1` | `{ configured, ok, redisMs, build, error? }` — diagnostic à ouvrir dans un navigateur (aucun secret) |
 | `GET` | — | `{ configured, rev, tournaments }` (structures + scores) |
 | `POST` | `{ op:"upsert", tournament }` | crée / met à jour la structure |
 | `POST` | `{ op:"delete", id }` | supprime un tournoi et ses scores |

@@ -15,7 +15,7 @@
   const LOGO = "icons/icon-192.png?v=6";
 
   /** Petits états d'interface conservés entre deux rendus. */
-  const ui = { q: "", qTid: null, plq: "", corrQ: "", corrAll: false, bulkOpen: false, bulkText: "", addName: "", addTid: null };
+  const ui = { q: "", qTid: null, plq: "", corrQ: "", corrAll: false, bulkOpen: false, bulkText: "", addName: "", addTid: null, connTest: null };
 
   // ============================================================
   //  Cloud : appels protégés (cloud.js peut évoluer / manquer)
@@ -32,6 +32,25 @@
   function isCloud() { return !!cloudCall("isCloud"); }
   function cloudStatus() { return cloudCall("getStatus") || "local"; }
   function pendingOps() { const n = Number(cloudCall("pendingCount")); return Number.isFinite(n) && n > 0 ? n : 0; }
+  function cloudInfo() { return cloudCall("getInfo") || { lastOkAt: 0, lastError: null, stuck: 0 }; }
+  /** Résultat lisible du bouton « Tester la connexion ». */
+  function connTestText(r) {
+    if (!r) return "";
+    if (r.ok) return "✓ Tout fonctionne : site et base de données joignables (réponse en " + r.ms + " ms).";
+    if (r.kind === "network") return "✗ Pas de réseau : cet appareil n’arrive pas à joindre le site. Vérifiez le Wi-Fi ou la 4G/5G, puis réessayez.";
+    if (r.kind === "timeout") return "✗ Réseau trop lent : le site n’a pas répondu à temps. Rapprochez-vous du Wi-Fi ou réessayez dans un instant.";
+    if (r.kind === "server") return "✗ Le site répond, mais la base de données est en panne : " + r.message;
+    return "✗ " + r.message;
+  }
+  function runConnTest(done) {
+    return Promise.resolve(cloudCall("testConnection")).then((r) => {
+      r = r || { ok: false, kind: "other", message: "Test impossible." };
+      ui.connTest = { text: connTestText(r), ok: !!r.ok, at: Date.now() };
+      if (done) done(ui.connTest);
+      updateSyncPill();
+      return ui.connTest;
+    });
+  }
 
   // ============================================================
   //  Utilitaires
@@ -1779,20 +1798,54 @@
     });
   }
 
-  function cloudCard() {
+  /** Bandeau d'état de la carte « Base de données partagée » (mis à jour en direct). */
+  function cloudBannerHTML() {
     const status = cloudStatus();
     const cloud = isCloud();
     const pend = pendingOps();
+    const info = cloudInfo();
+    const err = info.lastError;
+    const keep = " Les scores restent sur cet appareil et partiront tout seuls dès que ça repasse.";
+    let errTxt = ["⚠︎", "Connexion perdue", "Les scores sont conservés sur cet appareil et seront renvoyés automatiquement dès le retour du réseau."];
+    if (err && err.kind === "network") errTxt = ["📵", "Pas de connexion sur cet appareil", "Il n’arrive pas à joindre le site : vérifiez le Wi-Fi ou la 4G/5G." + keep];
+    else if (err && err.kind === "timeout") errTxt = ["🐢", "Réseau trop lent", "Le site n’a pas répondu à temps." + keep];
+    else if (err && err.kind === "server") errTxt = ["⚠︎", info.stuck ? plural(info.stuck, "saisie refusée", "saisies refusées") + " par le serveur" : "Le site répond, mais la base de données est en panne", err.message + keep];
     const txt = {
       local: ["📦", "Mode local (ce navigateur)", "Les données restent sur cet appareil. Dès que la base partagée est branchée sur Vercel, tout se synchronise automatiquement."],
       connected: ["☁︎", "Connecté — données partagées en direct", "Tous les écrans (table d’arbitrage, téléphones, affichage public) voient les mêmes scores en quelques secondes."],
       syncing: ["⟳", "Synchronisation en cours…", "Envoi des dernières modifications."],
-      error: ["⚠︎", "Connexion perdue", "Les scores sont conservés sur cet appareil et seront renvoyés automatiquement dès le retour du réseau."],
+      error: errTxt,
     }[status] || ["☁︎", status, ""];
-    const card = el(`<section class="card">${sectionTitle("Base de données partagée")}
-      <div class="info-banner ${status === "connected" ? "ok" : status === "error" ? "wait" : ""}"><span class="ico">${txt[0]}</span><div class="ib-txt"><strong>${esc(txt[1])}</strong><br/><span class="muted">${esc(txt[2])}</span>${pend ? `<br/><b class="pend">${plural(pend, "opération", "opérations")} en attente d’envoi</b>` : ""}</div></div>
+    const last = cloud ? (info.lastOkAt ? "Dernière réponse du serveur : " + ago(info.lastOkAt) + "." : "Aucune réponse du serveur depuis l’ouverture de l’app.") : "";
+    return `<div class="info-banner ${status === "connected" ? "ok" : status === "error" ? "wait" : ""}"><span class="ico">${txt[0]}</span><div class="ib-txt"><strong>${esc(txt[1])}</strong><br/><span class="muted">${esc(txt[2])}</span>${pend ? `<br/><b class="pend">${plural(pend, "opération", "opérations")} en attente d’envoi</b>` : ""}${last ? `<br/><small class="muted">${esc(last)}</small>` : ""}</div></div>`;
+  }
+  function refreshCloudBanner() {
+    const box = document.querySelector("#cloud-card .cloud-banner");
+    if (!box) return;
+    const html = cloudBannerHTML();
+    if (box._html !== html) { box._html = html; box.innerHTML = html; }
+  }
+
+  function cloudCard() {
+    const cloud = isCloud();
+    const test = ui.connTest && Date.now() - ui.connTest.at < 120000 ? ui.connTest : null;
+    const card = el(`<section class="card" id="cloud-card">${sectionTitle("Base de données partagée")}
+      <div class="cloud-banner">${cloudBannerHTML()}</div>
+      <p class="conn-test${test ? (test.ok ? " ok" : " ko") : ""}" aria-live="polite"${test ? "" : " hidden"}>${test ? esc(test.text) : ""}</p>
       <div class="btn-row"></div></section>`);
     const row = card.querySelector(".btn-row");
+    const res = card.querySelector(".conn-test");
+    if (cloudHas("testConnection")) {
+      const tb = el('<button class="btn" type="button">Tester la connexion</button>');
+      tb.onclick = () => {
+        tb.disabled = true; tb.textContent = "Test en cours…";
+        res.hidden = false; res.className = "conn-test"; res.textContent = "Test du réseau, du serveur et de la base de données…";
+        runConnTest((r) => { res.className = "conn-test " + (r.ok ? "ok" : "ko"); res.textContent = r.text; })
+          .catch((e) => { res.className = "conn-test ko"; res.textContent = "✗ " + String(e && e.message || e); })
+          .then(() => { tb.disabled = false; tb.textContent = "Tester la connexion"; });
+      };
+      row.appendChild(tb);
+    }
     const reload = el('<button class="btn subtle" type="button">⟳ Recharger depuis le cloud</button>');
     reload.disabled = !cloud || !cloudHas("pullNow");
     reload.onclick = () => {
@@ -2354,9 +2407,15 @@
     let txt = "Local";
     if (st === "connected") { pill.classList.add("connected"); txt = pend ? pend + " en attente" : "En ligne"; if (pend) pill.classList.add("pending"); }
     else if (st === "syncing") { pill.classList.add("syncing"); txt = "Synchro…"; }
-    else if (st === "error") { pill.classList.add("error"); txt = pend ? "Hors ligne · " + pend + " en attente" : "Hors ligne"; }
+    else if (st === "error") {
+      pill.classList.add("error");
+      const e = cloudInfo().lastError;
+      const base = e && e.kind === "server" ? "Panne serveur" : "Hors ligne";
+      txt = pend ? base + " · " + pend + " en attente" : base;
+    }
     label.textContent = txt;
     pill.title = st === "local" ? "Mode local (ce navigateur)" : "Base de données partagée : " + txt;
+    refreshCloudBanner();
   }
 
   // ============================================================
@@ -2381,6 +2440,7 @@
     if (!n || typeof n !== "object") return;
     const msg = String(n.message || "");
     if (n.kind === "storage") { cloudStorageFull = true; syncStorageWarning(); if (msg) toast(msg, "err", null, { ms: 7000 }); return; }
+    if (n.kind === "update") { toast(msg, "", { label: "Mettre à jour", fn: () => location.reload() }, { ms: 60000 }); return; }
     if (!msg) return;
     const kind = n.kind === "conflict" ? "err" : n.kind === "info" ? "" : "warn";
     toast(msg, kind, null, { ms: n.kind === "info" ? 3500 : 8000 });
@@ -2399,6 +2459,7 @@
     if (pill) pill.onclick = () => {
       const tid = tidOf(parseHash());
       if (tid) navigate("#/t/" + encodeURIComponent(tid) + "/settings");
+      else if (isCloud() && cloudStatus() === "error") runConnTest((r) => toast(r.text, r.ok ? "" : "err", null, { ms: 7000 }));
       else toast(isCloud() ? "Données partagées en direct ☁︎" : "Mode local — voir Réglages d’un tournoi pour le partage.");
     };
 

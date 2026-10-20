@@ -29,8 +29,11 @@
    la structure (nom, réglages…) ne touche jamais aux scores.
 
    API :
-     GET  /api/store?meta=1[&since=R] -> { configured, rev, revs? }   (sondage léger ;
-                                  revs = {id: jeton}, omis si since === rev)
+     GET  /api/store?meta=1[&since=R] -> { configured, rev, revs?, build }   (sondage léger ;
+                                  revs = {id: jeton}, omis si since === rev ; build = version
+                                  déployée, pour proposer la mise à jour aux appareils ouverts)
+     GET  /api/store?health=1      -> { configured, ok, redisMs, build, error? }  (diagnostic :
+                                  à ouvrir dans un navigateur, ne révèle aucun secret)
      GET  /api/store               -> { configured, rev, revs, tournaments:[{...structure, scores}] }
      GET  /api/store?ids=a,b       -> idem, seulement ces tournois (+ missing:[ids absents],
                                   deleted:[ids absents car SUPPRIMÉS] ; absent sans être supprimé
@@ -121,6 +124,8 @@ const LOCK_WAIT_MS = 4000;               // attente max pour l'obtenir
 const REDIS_TIMEOUT_MS = 7000;           // délai max d'un appel Redis
 const REQUEST_BUDGET_MS = 7500;          // délai max d'une requête (tous appels Redis compris)
 const MAX_IDS_PER_GET = 100;
+const REV_CACHE_MS = 1500;               // sondages simultanés d'une même instance : 1 seule lecture Redis
+const BUILD = String(process.env.VERCEL_GIT_COMMIT_SHA || process.env.VERCEL_DEPLOYMENT_ID || "").slice(0, 12) || null;
 
 const ID_RE = /^[A-Za-z0-9_-]{1,80}$/;
 const NAME_MAX = 200;
@@ -178,6 +183,8 @@ async function call(path, commands, timeoutMs) {
     }
     if (!res.ok) {
       const txt = await res.text().catch(() => "");
+      const known = upstashError(res.status, txt);
+      if (known) throw new Unavailable(known);
       const err = new Error("Redis " + res.status + " " + String(txt).slice(0, 200));
       err.status = res.status;
       throw err;
@@ -191,12 +198,32 @@ async function call(path, commands, timeoutMs) {
     }
     if (!Array.isArray(data)) throw new Error("Redis : réponse inattendue");
     return data.map((d) => {
-      if (d && d.error) throw new Error("Redis : " + d.error);
+      if (d && d.error) {
+        const known = upstashError(200, d.error);
+        if (known) throw new Unavailable(known);
+        throw new Error("Redis : " + d.error);
+      }
       return d ? d.result : null;
     });
   } finally {
     if (timer) clearTimeout(timer);
   }
+}
+
+/**
+ * Pannes connues d'Upstash traduites en clair pour l'organisateur (affichées
+ * dans Réglages) : quota de l'offre gratuite épuisé, clé d'accès refusée.
+ */
+function upstashError(status, txt) {
+  const t = String(txt || "");
+  if (/limit exceeded|max (daily )?requests?|quota/i.test(t)) {
+    return "Quota de la base de données Upstash épuisé (offre gratuite) : la base refuse toute lecture ou écriture. " +
+      "À régler sur console.upstash.com (passer en « Pay as you go » ou attendre la remise à zéro du quota). Détail : " + t.slice(0, 160);
+  }
+  if (status === 401 || status === 403 || /unauthori[sz]ed|WRONGPASS|NOPERM|invalid token/i.test(t)) {
+    return "Clé d'accès à la base de données refusée : vérifier les variables KV / Upstash dans les réglages du projet Vercel.";
+  }
+  return null;
 }
 
 /** Pile de commandes (exécutées dans l'ordre, non atomique). */
@@ -376,6 +403,7 @@ function needsBackup(curJson) {
 
 function done(res, r) {
   const body = { ok: true, configured: true, rev: toNum(r.rev) };
+  if (r.rev != null && !r.ignored) noteRev(body.rev);
   if (r.ignored) body.ignored = r.ignored;
   if (r.rv != null) body.rv = String(r.rv);
   if (hasOwn(r, "prv")) body.prv = r.prv == null ? "0" : String(r.prv);
@@ -439,13 +467,42 @@ async function readIds(ids, left) {
   return { rev: toNum(rev), revs, tournaments, missing, deleted };
 }
 
+/**
+ * Compteur de révision gardé quelques instants en mémoire de l'instance :
+ * 30 téléphones qui sondent toutes les 4 s coûtent ~1 lecture Redis par
+ * 1,5 s au lieu de 30 (quota de l'offre gratuite). Il ne sert QU'À répondre
+ * « rien de neuf » (since === rev) : un changement est toujours relu dans
+ * Redis, donc le cache ne peut que retarder une nouveauté de ≤ 1,5 s, jamais
+ * faire reculer un appareil.
+ */
+let revCache = null;   // { rev, at }
+function noteRev(rev) {
+  const n = Number(rev);
+  if (Number.isFinite(n)) revCache = { rev: n, at: Date.now() };
+}
+
 async function readMeta(since, left) {
   if (since != null) {
+    const c = revCache;
+    if (c && Date.now() - c.at < REV_CACHE_MS && c.rev === since) return { rev: since };
     const [rev] = await redis([["GET", K_REV]], left());
+    noteRev(toNum(rev));
     if (toNum(rev) === since) return { rev: toNum(rev) };
   }
   const [rev, ids, rvs] = await redis([["GET", K_REV], ["SMEMBERS", K_IDS], ["HGETALL", K_RV]], left());
+  noteRev(toNum(rev));
   return { rev: toNum(rev), revs: revsOf(idList(ids), rvs) };
+}
+
+/** Diagnostic : la base répond-elle, et en combien de temps ? */
+async function health(res) {
+  const t0 = Date.now();
+  try {
+    await redis([["GET", K_REV]], budget()());
+    return res.status(200).json({ configured: true, ok: true, redisMs: Date.now() - t0, build: BUILD });
+  } catch (e) {
+    return res.status(503).json({ configured: true, ok: false, redisMs: Date.now() - t0, build: BUILD, error: String((e && e.message) || e) });
+  }
 }
 
 function parseIds(q) {
@@ -721,15 +778,16 @@ module.exports = async (req, res) => {
   res.setHeader("Cache-Control", "no-store");
   try {
     if (!configured()) {
-      return res.status(200).json({ configured: false });
+      return res.status(200).json({ configured: false, build: BUILD });
     }
 
     if (req.method === "GET") {
       const q = req.query || {};
+      if (q.health === "1" || q.health === "true") return health(res);
       if (q.meta === "1" || q.meta === "true") {
         const since = q.since != null && q.since !== "" && Number.isFinite(Number(q.since)) ? Number(q.since) : null;
         const m = await readMeta(since, budget());
-        const out = { configured: true, rev: m.rev };
+        const out = { configured: true, rev: m.rev, build: BUILD };
         if (m.revs) out.revs = m.revs;
         return res.status(200).json(out);
       }
