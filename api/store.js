@@ -11,7 +11,8 @@
      - tg:t:<id>       STRING : JSON de la STRUCTURE d'un tournoi
                        (joueurs, réglages, tirage — jamais les scores)
      - tg:s:<id>       HASH   : matchId -> JSON d'un score
-                       { s1, s2, p1, p2, draw, at, by? }
+                       { s1, s2, p1, p2, draw, at, f?, by? }  (f = fin du match,
+                       1re saisie : ordre d'arrivée pour le repêchage)
      - tg:rev          compteur incrémenté à CHAQUE écriture
                        (sert au rafraîchissement « temps réel »)
      - tg:rv           HASH   : id -> jeton de révision du tournoi (change
@@ -329,10 +330,16 @@ function cleanRecord(r) {
   if (!isId(r.p1) || !isId(r.p2) || !isId(r.draw)) return null;
   if (!isTime(r.at)) return null;
   const out = { s1: r.s1, s2: r.s2, p1: r.p1, p2: r.p2, draw: r.draw, at: r.at };
+  if (isTime(r.f) && r.f > 0) out.f = r.f;   // fin du match (1re saisie) : ordre du repêchage
   if (isId(r.by)) out.by = r.by;     // appareil auteur (facultatif)
   return out;
 }
-function publicRecord(r) { return r ? { s1: r.s1, s2: r.s2, p1: r.p1, p2: r.p2, draw: r.draw, at: r.at } : null; }
+function publicRecord(r) {
+  if (!r) return null;
+  const o = { s1: r.s1, s2: r.s2, p1: r.p1, p2: r.p2, draw: r.draw, at: r.at };
+  if (r.f != null) o.f = r.f;
+  return o;
+}
 
 function needId(v, what) {
   if (!isId(v)) throw new BadRequest("Identifiant invalide (" + what + ").");

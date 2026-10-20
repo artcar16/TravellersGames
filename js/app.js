@@ -208,7 +208,8 @@
   /** Décrit la provenance d'un adversaire inconnu (HTML, noms échappés). */
   function srcHtml(t, st, src) {
     if (!src) return "votre adversaire";
-    if (src.type === "rep") return "le repêché n°" + nz(src.k);
+    if (src.type === "rep") return "le prochain repêché (prochain perdant de la phase 1)";
+    if (src.type === "loser") return "le prochain perdant de la phase 1";
     if (src.type === "exempt") return `<b>${esc(pname(t, src.pid))}</b>`;
     if (src.type !== "p1" && src.type !== "winner") return "votre adversaire";
     const m = st.byId[src.matchId];
@@ -244,7 +245,7 @@
     const pair = (x) => `<b>${esc(pname(t, x.p1))}</b> – <b>${esc(pname(t, x.p2))}</b>`;
     const parts = [];
     if (f.ready.length) parts.push("en jeu : " + f.ready.slice(0, 4).map(pair).join(", ") + (f.ready.length > 4 ? ` … (+${f.ready.length - 4})` : ""));
-    if (f.rep) parts.push("après la fin de la phase 1 (repêchés)");
+    if (f.rep) parts.push("un repêché arrive dès le prochain match de phase 1 terminé");
     return parts.join(" · ");
   }
 
@@ -271,7 +272,7 @@
         const pre = m.stage === "cons" ? "Consolante — " : (picked && ctx.justPicked ? "Repêché ! " : "");
         const where = `${esc(stageLabel(st, m, true))} · en ${plural(m.points, "point")}`;
         if (w.type === "rep") {
-          return { cls: "wait", icon: "⏳", title: `${pre}Attendez la fin de la phase 1 (repêchés)`, sub: `Vous affronterez le repêché n°${nz(w.k)} (meilleur perdant) · ${where}` };
+          return { cls: "wait", icon: "⏳", title: `${pre}Attendez le prochain repêché`, sub: `Ce sera le prochain joueur à perdre son match de phase 1 · ${where}` };
         }
         const detail = waitDetailHtml(t, st, w);
         return { cls: "wait", icon: "⏳", title: `${pre}Attendez ${srcHtml(t, st, w)}`, sub: `Prochain match : ${where}${detail ? " · " + detail : ""}` };
@@ -281,13 +282,13 @@
           return {
             cls: "out", icon: "↘",
             title: consFuture ? "Direction la consolante" : "Éliminé",
-            sub: consFuture ? "Pas de repêchage dans ce tournoi : vous jouerez la consolante à la fin de la phase 1." : "Pas de repêchage dans ce tournoi.",
+            sub: consFuture ? "Pas de repêchage dans ce tournoi : direction la consolante." : "Pas de repêchage dans ce tournoi.",
           };
         }
         return {
           cls: s.inZone ? "rep in" : "rep", icon: s.inZone ? "★" : "☆",
           title: `${ordinal(s.rank)} des perdants — ${plural(s.needed, "place")} de repêchage`,
-          sub: `${s.inZone ? "Dans la zone pour l’instant" : "Hors zone pour l’instant"} (${plural(s.pf, "pt marqué", "pts marqués")}) · réponse en fin de phase 1${!s.inZone && consFuture ? " — sinon consolante" : ""}`,
+          sub: `${s.inZone ? "Dans la zone pour l’instant" : "Hors zone pour l’instant"}${!s.inZone && consFuture ? " — sinon consolante" : ""}`,
         };
       }
       case "champion":
@@ -1172,7 +1173,7 @@
       rows.push(progRow("Tableau final" + (st.main.size ? ` · ${nz(st.main.size)}` : ""), countDone(mm), mm.length, null, st.champion ? "done" : ""));
       if (st.consolante) {
         const cm = realMatches([].concat.apply([], st.consolante.rounds));
-        rows.push(progRow(`Consolante · ${nz(st.consolante.entrants.length)}`, countDone(cm), cm.length, null, st.consolante.champion ? "done" : ""));
+        rows.push(progRow(`Consolante · ${nz(st.consolante.expected || st.consolante.entrants.length)}`, countDone(cm), cm.length, null, st.consolante.champion ? "done" : ""));
       } else if (t.settings.consolante !== false && st.plan.ok && st.plan.consolante >= 2) {
         rows.push(progRow("Consolante", 0, 1, `<small>après la phase 1 · ${nz(st.plan.consolante)} joueurs</small>`, "later"));
       }
@@ -1210,29 +1211,23 @@
     const R = st.repechage.needed;
     if (!R || st.main.size <= 1) return null;
     const rk = st.repechage.ranking;
-    const remaining = st.phase1.total - st.phase1.played;
-    const final = st.repechage.resolved;
-    const consOn = t.settings.consolante !== false;
-    const consWill = final ? !!st.consolante : (consOn && st.plan.ok && st.plan.consolante >= 2);
+    const full = st.repechage.resolved;
     const consSet = {};
     if (st.consolante) st.consolante.entrants.forEach((p) => { consSet[p] = true; });
+    const free = R - st.repechage.picks.length;
     const card = el(`<section class="card rep-card">
-      ${sectionTitle("Repêchage", final ? pillHtml("ok", "Définitif") : pillHtml("warn", "Provisoire"))}
-      <p class="muted small">${plural(R, "place")} au tableau final pour les meilleurs perdants de la phase 1 · classement : points marqués, puis différentiel, puis tirage au sort.${final ? "" : ` <b>${plural(remaining, "match", "matchs")} de phase 1 restant${remaining > 1 ? "s" : ""}.</b>`}</p>
-      <div class="table-wrap"><table class="table rep-table"><colgroup><col class="c-rank"/><col/><col class="c-num"/><col class="c-num"/></colgroup><thead><tr><th class="rank" title="Rang">#</th><th>Perdant</th><th class="num">Pts</th><th class="num">Diff.</th></tr></thead><tbody></tbody></table></div>
+      ${sectionTitle("Repêchage", full ? pillHtml("ok", "Complet") : pillHtml("warn", plural(free, "place libre", "places libres")))}
+      <p class="muted small">${plural(R, "place")} au tableau final pour les <b>${R > 1 ? R + " premiers" : "premier"}</b> à perdre leur match de phase 1 : ${R > 1 ? "ils rejouent" : "il rejoue"} tout de suite. Les perdants suivants partent aussitôt en consolante.</p>
+      <div class="table-wrap"><table class="table rep-table"><colgroup><col class="c-rank"/><col/><col class="c-time"/></colgroup><thead><tr><th class="rank" title="Ordre d’arrivée">#</th><th>Perdant</th><th class="num">Fin</th></tr></thead><tbody></tbody></table></div>
     </section>`);
     const tb = card.querySelector("tbody");
-    if (!rk.length) tb.appendChild(el('<tr><td colspan="4" class="muted center">Aucun perdant pour l’instant.</td></tr>'));
-    rk.forEach((x, i) => {
-      let tag = "";
-      if (x.picked) tag = pillHtml("gold sm", "Repêché");
-      else if (x.inZone) tag = '<span class="star" title="Dans la zone pour l’instant">★</span>';
-      else if (final) tag = consSet[x.pid] ? pillHtml("cons sm", "Consolante") : pillHtml("out sm", "Éliminé");
-      tb.appendChild(el(`<tr class="${x.inZone ? "in" : "outz"}">
-        <td class="rank">${nz(x.rank)}</td><td class="rep-name"><span class="rn">${esc(pname(t, x.pid))}</span>${tag}</td><td class="num"><b>${nz(x.pf)}</b></td><td class="num">${signed(x.diff)}</td></tr>`));
-      if (i === R - 1) tb.appendChild(el(`<tr class="cut"><td colspan="4"><span>Ligne de repêchage · ${plural(R, "place")}${consWill ? " — en dessous : consolante" : ""}</span></td></tr>`));
+    if (!rk.length) tb.appendChild(el('<tr><td colspan="3" class="muted center">Aucun perdant pour l’instant.</td></tr>'));
+    rk.forEach((x) => {
+      const tag = x.picked ? pillHtml("gold sm", "Repêché") : consSet[x.pid] ? pillHtml("cons sm", "Consolante") : pillHtml("out sm", "Éliminé");
+      tb.appendChild(el(`<tr class="${x.picked ? "in" : "outz"}">
+        <td class="rank">${nz(x.rank)}</td><td class="rep-name"><span class="rn">${esc(pname(t, x.pid))}</span>${tag}</td><td class="num time">${x.at ? esc(fmtTime(x.at)) : ""}</td></tr>`));
     });
-    if (rk.length && rk.length < R) tb.appendChild(el(`<tr class="cut open"><td colspan="4"><span>${plural(R - rk.length, "place encore libre", "places encore libres")}</span></td></tr>`));
+    if (free > 0) tb.appendChild(el(`<tr class="cut open"><td colspan="3"><span>${plural(free, "place encore libre", "places encore libres")} : ${free > 1 ? "les prochains perdants" : "le prochain perdant"}</span></td></tr>`));
     return card;
   }
 
@@ -1268,7 +1263,7 @@
     const pair = (p) => `${N(p[0])} – ${N(p[1])}`;
     const items = [];
     if (d.phase1Reopened) {
-      items.push(`<li><b>La phase 1 sera rouverte</b>${d.picksOut.length ? ` : repêchés annulés (${names(d.picksOut)})` : ""}${d.consolanteRemoved ? ", consolante retirée" : ""}.</li>`);
+      items.push(`<li><b>La phase 1 sera rouverte</b>${d.picksOut.length ? ` : ${names(d.picksOut)} ${d.picksOut.length > 1 ? "perdent leur place" : "perd sa place"} de repêché` : ""}${d.consolanteRemoved ? ", consolante retirée" : ""}.</li>`);
     } else {
       // Le nouveau vainqueur du match corrigé n'est plus repêché : il est qualifié par sa victoire.
       const out = d.picksOut.filter((p) => p !== newWinner);
@@ -1454,7 +1449,7 @@
     const w1 = m.winner === m.p1;
     const ws = nz(w1 ? m.score1 : m.score2), ls = nz(w1 ? m.score2 : m.score1);
     const W = pname(t, o.winner), L = pname(t, o.loser);
-    const pickedNow = (pid) => !!o.phase1Completed || !!(opts.impact && opts.impact.picksIn && opts.impact.picksIn.indexOf(pid) >= 0);
+    const pickedNow = (pid) => !!o.phase1Completed || (!!o.loserPicked && pid === o.loser) || !!(opts.impact && opts.impact.picksIn && opts.impact.picksIn.indexOf(pid) >= 0);
     const wInfo = statusInfo(t, st, o.winner, o.winnerStatus, { justPicked: pickedNow(o.winner) });
     const lInfo = statusInfo(t, st, o.loser, o.loserStatus, { justPicked: pickedNow(o.loser) });
     const parts = [];
@@ -1472,7 +1467,7 @@
     if (o.phase1Completed && st.main.size > 1) {
       const rp = o.repechage || st.repechage;
       const picks = rp.picks.map((pid) => `<span class="chip gold">${esc(pname(t, pid))}</span>`).join(" ");
-      const consTxt = st.consolante ? `Consolante lancée (${nz(st.consolante.entrants.length)} joueurs)` : (t.settings.consolante !== false ? "Pas de consolante (pas assez de joueurs)" : "");
+      const consTxt = st.consolante ? `Consolante complète (${nz(st.consolante.entrants.length)} joueurs)` : (t.settings.consolante !== false ? "Pas de consolante (pas assez de joueurs)" : "");
       parts.push(`<div class="p1-done"><div class="p1d-title">Phase 1 terminée !</div><div class="p1d-line">${rp.needed ? `Repêchés (${nz(rp.picks.length)}) : <span class="p1d-chips">${picks}</span>` : "Aucun repêchage : le tableau final est complet."}</div>${consTxt ? `<div class="p1d-line">${esc(consTxt)}</div>` : ""}</div>`);
     }
     parts.push(`<div class="pcard win"><div class="pc-head"><span class="pc-name">${esc(W)}</span>${pillHtml("gold", "Gagne")}</div>${statusCardHtml(wInfo)}</div>`);
@@ -1560,7 +1555,7 @@
 
     // --- Format & affichage ---
     const fmtC = el(`<section class="card">${sectionTitle("Consolante & affichage")}
-      <label class="toggle"><input type="checkbox" name="consolante" ${s.consolante ? "checked" : ""}/><span class="track"></span><span class="tg-txt">Consolante<small>Les perdants non repêchés jouent un second tableau, lancé automatiquement à la fin de la phase 1.</small></span></label>
+      <label class="toggle"><input type="checkbox" name="consolante" ${s.consolante ? "checked" : ""}/><span class="track"></span><span class="tg-txt">Consolante<small>Les perdants non repêchés jouent un second tableau, rempli au fil de l’eau : chacun y joue dès qu’un adversaire arrive.</small></span></label>
       <hr class="divider"/>
       <label class="toggle"><input type="checkbox" name="autoRotate" ${s.autoRotate ? "checked" : ""}/><span class="track"></span><span class="tg-txt">Rotation automatique des arbres<small>L’écran public alterne entre l’arbre principal et la consolante.</small></span></label>
       <div class="rot-secs"></div>
@@ -1989,10 +1984,14 @@
     return evalCW(pick.D.CW, headFs).D;
   }
 
+  /** Consolante commencée (au moins un joueur arrivé) : elle entre dans la rotation de l'écran. */
+  function consLive(st) { return !!(st.consolante && st.consolante.entrants.length); }
+
   /** Libellé d'un siège encore inconnu. */
   function tbdLabel(t, st, src, arrow) {
     if (!src) return "—";
     if (src.type === "rep") return "Repêché n°" + nz(src.k);
+    if (src.type === "loser") return "Prochain perdant";
     if (src.type === "exempt") return pname(t, src.pid);
     if (src.type === "p1" || src.type === "winner") {
       const sm = st.byId[src.matchId];
@@ -2032,12 +2031,12 @@
       if (node.pid) {
         const r = st.repechage.ranking.find((x) => x.pid === node.pid);
         const nm = pname(t, node.pid);
-        const pts = r ? " · " + plural(r.pf, "pt") : "";
+        const pts = r ? " · " + ordinal(r.rank) + " perdant" : "";
         if (compact) return { cls: "leaf rep known c1", html: `<div class="r one in" title="${esc(nm)} · repêché n°${k}${esc(pts)}"><span class="n">${fit(node.pid, D.CW0 - 104)}</span><span class="note">repêché${esc(pts)}</span></div>` };
         return { cls: "leaf rep known", html: trow("in", fit(node.pid, nameW), "", nm) + trow("note", "Repêché n°" + k + esc(pts), "") };
       }
-      if (compact) return { cls: "leaf rep c1", html: `<div class="r one tbd"><span class="n">Repêché n°${k}</span><span class="note">meilleur perdant</span></div>` };
-      return { cls: "leaf rep", html: trow("tbd", "Repêché n°" + k, "") + trow("note", "Meilleur perdant", "") };
+      if (compact) return { cls: "leaf rep c1", html: `<div class="r one tbd"><span class="n">Repêché n°${k}</span><span class="note">prochain perdant</span></div>` };
+      return { cls: "leaf rep", html: trow("tbd", "Repêché n°" + k, "") + trow("note", "Prochain perdant de phase 1", "") };
     }
     const m = node.match;
     if (m.bye) {
@@ -2264,10 +2263,10 @@
       const consPossible = !!st.consolante || (t.settings.consolante !== false && st.plan.ok && st.plan.consolante >= 2);
       bc.hidden = !consPossible; rot.hidden = !consPossible; $(".dock-sep", dock).hidden = !consPossible;
       bc.disabled = !st.consolante;
-      bc.title = st.consolante ? "Afficher la consolante" : "Disponible à la fin de la phase 1";
+      bc.title = st.consolante ? "Afficher la consolante" : "Pas de consolante dans ce tournoi";
       bm.classList.toggle("active", !cons);
       bc.classList.toggle("active", cons);
-      rot.classList.toggle("on", S.rotateOn && !!st.consolante);
+      rot.classList.toggle("on", S.rotateOn && consLive(st));
       rot.disabled = !st.consolante;
       rot.title = S.rotateOn ? "Rotation automatique : activée (toucher pour mettre en pause)" : "Rotation automatique : en pause";
       fb.classList.toggle("on", !S.fit);
@@ -2359,7 +2358,8 @@
       applyFit();
 
       // Rotation
-      if (!(S.rotateOn && st.consolante)) { stopCycle(); bar.hidden = true; bar.innerHTML = ""; }
+      // Rotation dès que la consolante a ses premiers joueurs (pas d'arbre vide à l'écran).
+      if (!(S.rotateOn && consLive(st))) { stopCycle(); bar.hidden = true; bar.innerHTML = ""; }
       else if (!S.timer) startCycle(Math.max(5, parseInt(t.settings.rotateSeconds, 10) || 20));
     }
 

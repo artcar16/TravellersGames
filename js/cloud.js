@@ -983,6 +983,7 @@
   function pushScore(tid, matchId, record, opts) {
     if (!isObj(record) || typeof tid !== "string" || typeof matchId !== "string") return;
     const rec = { s1: record.s1, s2: record.s2, p1: record.p1, p2: record.p2, draw: record.draw, at: Number(record.at) || Date.now(), by: getDeviceId() };
+    if (Number.isFinite(record.f) && record.f > 0) rec.f = record.f;   // fin du match (ordre du repêchage)
     // Une correction l'emporte toujours sur le score qu'on a vu, même si
     // l'horloge de cet appareil retarde.
     const seen = seenAt(tid, matchId);

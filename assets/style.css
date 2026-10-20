@@ -442,6 +442,8 @@ body.fullbleed .storage-warn { position: fixed; left: 0; right: 0; top: auto; bo
 .rep-table { table-layout: fixed; }
 .rep-table col.c-rank { width: 52px; }
 .rep-table col.c-num { width: 54px; }
+.rep-table col.c-time { width: 70px; }
+.rep-table td.time { white-space: nowrap; font-variant-numeric: tabular-nums; }
 .rep-table .rep-name { overflow-wrap: anywhere; }
 .rep-table .rep-name .rn { margin-right: 8px; }
 .rep-table .rep-name .pill, .rep-table .rep-name .star { vertical-align: middle; }

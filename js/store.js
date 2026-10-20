@@ -6,12 +6,14 @@
      Nombre impair → un exempt, qualifié d'office.
    - Tableau final : élimination directe, taille = puissance de 2
      juste au-dessus du nombre de qualifiés. Les places manquantes
-     sont comblées par les MEILLEURS PERDANTS de la phase 1
-     (points marqués, puis différentiel, puis tirage au sort).
+     sont données AUSSITÔT aux PREMIERS PERDANTS de la phase 1, dans
+     l'ordre où leur match s'est terminé (heure de la première saisie
+     du score) : personne n'attend la fin de la phase 1.
      Un match se joue dès que ses deux adversaires sont connus.
-   - Consolante : tous les perdants non repêchés, en élimination
-     directe (exempts au 1er tour si besoin pour revenir à une
-     puissance de 2). Générée automatiquement en fin de phase 1.
+   - Consolante : les perdants non repêchés, en élimination directe,
+     remplie elle aussi au fil de l'eau (les deux premiers arrivés
+     jouent ensemble, puis les deux suivants… ; les derniers arrivés
+     reçoivent les exempts et entrent directement au 2e tour).
 
    ARCHITECTURE
    - La STRUCTURE (joueurs, réglages, tirage) et les SCORES sont
@@ -125,10 +127,12 @@
       consolante: true,
       autoRotate: true,
       rotateSeconds: 20,
-      rules: "Phase 1 : tout le monde joue. Les gagnants se qualifient pour le tableau final, complété par les meilleurs perdants (points marqués). Les autres jouent la consolante. Le premier joueur atteignant le nombre de points du match l'emporte.",
+      rules: "Phase 1 : tout le monde joue. Les gagnants se qualifient pour le tableau final ; les places restantes vont aussitôt aux premiers perdants (dans l'ordre de fin des matchs), qui rejouent tout de suite. Les autres perdants jouent la consolante, elle aussi au fil de l'eau. Le premier joueur atteignant le nombre de points du match l'emporte.",
     };
   }
 
+  /** Ancien texte par défaut (repêchage aux points) : remplacé par le nouveau. */
+  const OLD_RULES = "Phase 1 : tout le monde joue. Les gagnants se qualifient pour le tableau final, complété par les meilleurs perdants (points marqués). Les autres jouent la consolante. Le premier joueur atteignant le nombre de points du match l'emporte.";
   function normSettings(s) {
     const d = defaultSettings();
     const o = Object.assign({}, d, s || {});
@@ -139,7 +143,7 @@
     o.mainPoints = d.mainPoints.map((v, i) => posInt(mp[i], v));
     o.consolante = o.consolante !== false;
     o.autoRotate = o.autoRotate !== false;
-    if (typeof o.rules !== "string") o.rules = d.rules;
+    if (typeof o.rules !== "string" || o.rules === OLD_RULES) o.rules = d.rules;
     return o;
   }
   function posInt(v, def) { const n = parseInt(v, 10); return Number.isFinite(n) && n > 0 ? Math.min(n, 99) : def; }
@@ -214,6 +218,7 @@
       const s1 = Number(r.s1), s2 = Number(r.s2);
       if (!Number.isInteger(s1) || !Number.isInteger(s2) || s1 < 0 || s2 < 0 || s1 > 99 || s2 > 99) return;
       out[k] = { s1, s2, p1: String(r.p1 || ""), p2: String(r.p2 || ""), draw: String(r.draw || ""), at: Number(r.at) || 0 };
+      if (r.f != null && Number.isFinite(Number(r.f)) && Number(r.f) > 0) out[k].f = Number(r.f);
     });
     return out;
   }
@@ -500,6 +505,7 @@
           m.winner = a > b ? m.p1 : m.p2;
           m.loser = a > b ? m.p2 : m.p1;
           m.status = "done"; m.at = r.at || null;
+          m.f = Number.isFinite(r.f) ? r.f : (r.at || 0);   // fin du match (1re saisie)
           return;
         }
         m.staleScore = true;     // score enregistré pour d'autres joueurs → ignoré
@@ -519,64 +525,50 @@
     st.phase1 = { matches: p1, done: p1Done, played: p1.filter((m) => m.status === "done").length, total: p1.length };
     st.exempt = d.exempt || null;
 
-    // ----- Classement des perdants (repêchage) -----
+    // ----- Repêchage AU FIL DE L'EAU -----
+    // Les perdants de phase 1 sont pris dans l'ordre où leur match s'est
+    // terminé (heure de la PREMIÈRE saisie : une correction de score ne fait
+    // pas perdre sa place) : les R premiers sont repêchés aussitôt (place
+    // libre de plus petit numéro), les suivants partent aussitôt en
+    // consolante. Un repêché n'est jamais placé face au joueur qui vient de
+    // le battre : si la seule place restante est celle-là, il va en
+    // consolante et la place revient au perdant suivant.
+    // Une place n'est jamais réattribuée quand d'autres matchs se terminent.
     const R = d.slots.filter((x) => x.kind === "rep").length;
-    const ranking = p1.filter((m) => m.status === "done").map((m) => {
-      const lostAs1 = m.loser === m.p1;
-      const pf = lostAs1 ? m.score1 : m.score2;
-      const pa = lostAs1 ? m.score2 : m.score1;
-      return { pid: m.loser, matchId: m.id, pf, pa, diff: pf - pa, tb: (d.tiebreak && d.tiebreak[m.loser]) || 0 };
-    }).sort((x, y) => (y.pf - x.pf) || (y.diff - x.diff) || (y.tb - x.tb));
-    ranking.forEach((x, i) => { x.rank = i + 1; x.inZone = i < R; x.picked = p1Done && i < R; });
-    const picks = p1Done ? ranking.slice(0, R).map((x) => x.pid) : [];
-    st.repechage = { needed: R, resolved: p1Done, ranking, picks };
-
-    // ----- Tableau final -----
     const P = d.slots.length;
     const K = log2(P);
     st.main.size = P; st.main.totalRounds = K;
     const p1ById = {}; p1.forEach((m) => { p1ById[m.id] = m; });
-
-    // Placement des repêchés sur les places réservées : par ordre de classement,
-    // en évitant qu'un repêché retombe sur le joueur qui vient de le battre.
+    const repSlots = [];
+    d.slots.forEach((sl, j) => { if (sl.kind === "rep") repSlots.push({ j, k: sl.k }); });
+    repSlots.sort((a, b) => a.k - b.k);
+    const facesOwnMatch = (r, m) => { const o = d.slots[r.j ^ 1]; return !!o && o.kind === "match" && o.ref === m.id; };
+    const arrivals = p1.filter((m) => m.status === "done").sort((x, y) => (x.f - y.f) || (x.index - y.index));
     const repAssign = {};                    // k -> pid
-    if (p1Done && picks.length) {
-      const repSlots = [];
-      d.slots.forEach((sl, j) => { if (sl.kind === "rep") repSlots.push({ j, k: sl.k }); });
-      repSlots.sort((a, b) => a.k - b.k);
-      const conqueror = {};
-      p1.forEach((m) => { if (m.status === "done") conqueror[m.loser] = m.winner; });
-      const opponentAt = (j) => {
-        const sl = d.slots[j ^ 1];
-        if (!sl) return null;
-        if (sl.kind === "match") { const pm = p1ById[sl.ref]; return pm && pm.status === "done" ? pm.winner : null; }
-        if (sl.kind === "bye") return sl.pid;
-        return null;
-      };
-      const forbid = (pid, r) => !!pid && !!conqueror[pid] && opponentAt(r.j) === conqueror[pid];
-      const assign = repSlots.map(() => null);
-      picks.forEach((pid) => {
-        let i = repSlots.findIndex((r, idx) => assign[idx] === null && !forbid(pid, r));
-        if (i < 0) i = assign.findIndex((x) => x === null);
-        if (i >= 0) assign[i] = pid;
-      });
-      for (let i = 0; i < assign.length; i++) {
-        if (!forbid(assign[i], repSlots[i])) continue;
-        for (let j = 0; j < assign.length; j++) {
-          if (j !== i && !forbid(assign[i], repSlots[j]) && !forbid(assign[j], repSlots[i])) {
-            const x = assign[i]; assign[i] = assign[j]; assign[j] = x;
-            break;
-          }
+    const picks = [], consQueue = [];
+    const ranking = arrivals.map((m, i) => {
+      const lostAs1 = m.loser === m.p1;
+      const pf = lostAs1 ? m.score1 : m.score2;
+      const pa = lostAs1 ? m.score2 : m.score1;
+      const x = { pid: m.loser, matchId: m.id, pf, pa, diff: pf - pa, rank: i + 1, at: m.f || null, picked: false, inZone: false, k: null };
+      if (picks.length < R) {
+        const free = repSlots.find((r) => !repAssign[r.k] && !facesOwnMatch(r, m));
+        if (free) {
+          repAssign[free.k] = m.loser; picks.push(m.loser);
+          x.picked = x.inZone = true; x.k = free.k;
+          return x;
         }
       }
-      repSlots.forEach((r, idx) => { if (assign[idx]) repAssign[r.k] = assign[idx]; });
-    }
-    st.repechage.assign = repAssign;
+      consQueue.push(m.loser);
+      return x;
+    });
+    st.repechage = { needed: R, resolved: picks.length >= R, ranking, picks, assign: repAssign };
 
+    // ----- Tableau final -----
     st.leaves = d.slots.map((sl, i) => {
       if (sl.kind === "match") return { kind: "match", slot: i, match: p1ById[sl.ref] };
       if (sl.kind === "bye") return { kind: "exempt", slot: i, pid: sl.pid };
-      return { kind: "rep", slot: i, k: sl.k, pid: p1Done ? (repAssign[sl.k] || null) : null };
+      return { kind: "rep", slot: i, k: sl.k, pid: repAssign[sl.k] || null };
     });
 
     if (P >= 2) {
@@ -595,7 +587,7 @@
             m["p" + slotNo] = sl.pid;
           } else {
             m["src" + slotNo] = { type: "rep", k: sl.k };
-            m["p" + slotNo] = p1Done ? (repAssign[sl.k] || "BYE") : null;
+            m["p" + slotNo] = repAssign[sl.k] || (p1Done ? "BYE" : null);
           }
         });
         settle(m);
@@ -625,46 +617,54 @@
       st.champion = p1[0].status === "done" ? p1[0].winner : null;
     }
 
-    // ----- Consolante -----
-    if (s.consolante && p1Done) {
-      const pickSet = {};
-      picks.forEach((p) => { pickSet[p] = true; });
-      const co = d.consOrder || d.tiebreak || {};
-      const entrants = ranking.map((x) => x.pid).filter((p) => !pickSet[p])
-        .sort((a, b) => ((co[b] || 0) - (co[a] || 0)) || (a < b ? -1 : 1));
-      if (entrants.length >= 2) {
-        const C = entrants.length, Pc = nextPow2(C), Kc = log2(Pc);
-        const seats = seedOrder(Pc).map((seed) => (seed <= C ? entrants[seed - 1] : "BYE"));
-        const rounds = [];
-        let prev = [];
-        for (let i = 0; i < Pc / 2; i++) {
-          const m = mk("cons", 1, i, "c1-" + i, s.consolePoints);
-          m.p1 = seats[2 * i]; m.p2 = seats[2 * i + 1];
-          m.src1 = { type: "player" }; m.src2 = { type: "player" };
-          settle(m);
-          prev.push(m);
-        }
-        rounds.push(prev);
-        for (let r = 2; r <= Kc; r++) {
-          const cur = [];
-          for (let i = 0; i < prev.length / 2; i++) {
-            const m = mk("cons", r, i, "c" + r + "-" + i, s.consolePoints);
-            const a = prev[2 * i], b = prev[2 * i + 1];
-            a.next = { id: m.id, slot: 1 }; b.next = { id: m.id, slot: 2 };
-            m.src1 = { type: "winner", matchId: a.id }; m.src2 = { type: "winner", matchId: b.id };
-            m.p1 = winnerOf(a); m.p2 = winnerOf(b);
-            settle(m);
-            cur.push(m);
-          }
-          rounds.push(cur);
-          prev = cur;
-        }
-        const fin = rounds[Kc - 1][0];
-        st.consolante = {
-          rounds, size: Pc, totalRounds: Kc, entrants,
-          champion: fin.status === "done" && fin.winner !== "BYE" ? fin.winner : null,
-        };
+    // ----- Consolante AU FIL DE L'EAU -----
+    // Taille connue dès le tirage : C = matchs de phase 1 − places de
+    // repêchage. Les perdants non repêchés y entrent dans leur ordre
+    // d'arrivée : les deux premiers jouent ensemble aussitôt, puis les deux
+    // suivants… ; les derniers arrivés reçoivent les exempts (directement au
+    // 2e tour, où un vainqueur les attend déjà).
+    const Cn = p1.length - R;
+    if (s.consolante && Cn >= 2) {
+      const Pc = nextPow2(Cn), Kc = log2(Pc), byes = Pc - Cn;
+      const posOf = {};
+      seedOrder(Pc).forEach((seed, pos) => { posOf[seed] = pos; });
+      const fill = [];
+      for (let sd = byes + 1; sd <= Pc / 2; sd++) fill.push(posOf[sd], posOf[Pc + 1 - sd]);
+      for (let sd = 1; sd <= byes; sd++) fill.push(posOf[sd]);
+      const seats = new Array(Pc).fill(null);
+      for (let sd = Cn + 1; sd <= Pc; sd++) seats[posOf[sd]] = "BYE";
+      const entrants = consQueue.slice(0, Cn);
+      entrants.forEach((pid, i) => { seats[fill[i]] = pid; });
+      const rounds = [];
+      let prev = [];
+      for (let i = 0; i < Pc / 2; i++) {
+        const m = mk("cons", 1, i, "c1-" + i, s.consolePoints);
+        m.p1 = seats[2 * i]; m.p2 = seats[2 * i + 1];
+        m.src1 = { type: seats[2 * i] === "BYE" ? "bye" : "loser" };
+        m.src2 = { type: seats[2 * i + 1] === "BYE" ? "bye" : "loser" };
+        settle(m);
+        prev.push(m);
       }
+      rounds.push(prev);
+      for (let r = 2; r <= Kc; r++) {
+        const cur = [];
+        for (let i = 0; i < prev.length / 2; i++) {
+          const m = mk("cons", r, i, "c" + r + "-" + i, s.consolePoints);
+          const a = prev[2 * i], b = prev[2 * i + 1];
+          a.next = { id: m.id, slot: 1 }; b.next = { id: m.id, slot: 2 };
+          m.src1 = { type: "winner", matchId: a.id }; m.src2 = { type: "winner", matchId: b.id };
+          m.p1 = winnerOf(a); m.p2 = winnerOf(b);
+          settle(m);
+          cur.push(m);
+        }
+        rounds.push(cur);
+        prev = cur;
+      }
+      const fin = rounds[Kc - 1][0];
+      st.consolante = {
+        rounds, size: Pc, totalRounds: Kc, entrants, expected: Cn,
+        champion: fin.status === "done" && fin.winner !== "BYE" ? fin.winner : null,
+      };
     }
 
     const real = all.filter((m) => !m.bye);
@@ -684,7 +684,6 @@
    *  - notDrawn        : tirage pas encore fait
    *  - play            : un match l'attend (match, opponent)
    *  - wait            : son prochain match attend un adversaire (match, waitFor)
-   *  - repechable      : perdu en phase 1, phase 1 en cours (rank, needed, inZone)
    *  - champion        : vainqueur du tableau final
    *  - consoleChampion : vainqueur de la consolante
    *  - out             : éliminé
@@ -702,11 +701,6 @@
     }
     if (st.champion === pid) return { kind: "champion" };
     if (st.consolante && st.consolante.champion === pid) return { kind: "consoleChampion" };
-    const lostP1 = st.phase1.matches.find((m) => m.status === "done" && m.loser === pid);
-    if (lostP1 && !st.phase1.done) {
-      const r = st.repechage.ranking.find((x) => x.pid === pid);
-      return { kind: "repechable", rank: r ? r.rank : null, needed: st.repechage.needed, inZone: !!(r && r.inZone), pf: r ? r.pf : null };
-    }
     return { kind: "out" };
   }
 
@@ -747,6 +741,7 @@
 
     const prev = t.scores && t.scores[matchId];
     const rec = { s1, s2, p1: m.p1, p2: m.p2, draw: t.draw.id, at: Math.max(Date.now(), prev && prev.draw === t.draw.id ? (prev.at || 0) + 1 : 0) };
+    rec.f = firstDone(m, prev, rec.at, t);
     t.scores = t.scores || {};
     t.scores[matchId] = rec;
     persistLocal();
@@ -754,6 +749,20 @@
     if (cloudOn() && TG.Cloud.pushScore) TG.Cloud.pushScore(t.id, matchId, rec, { overwrite: !!opts.overwrite });
     const after = state(t);
     return { ok: true, outcome: outcomeOf(t, before, after, matchId) };
+  }
+
+  /**
+   * Heure de fin d'un match (ordre d'arrivée des perdants : repêchage et
+   * consolante). Une CORRECTION garde l'heure de la première saisie.
+   */
+  function firstDone(m, prev, now, t) {
+    if (m && m.status === "done" && Number.isFinite(m.f) && m.f > 0) return m.f;
+    if (prev && Number.isFinite(prev.f) && prev.f > 0 && m && ((prev.p1 === m.p1 && prev.p2 === m.p2) || (prev.p1 === m.p2 && prev.p2 === m.p1))) return prev.f;
+    // Nouveau résultat : strictement après tous ceux déjà connus ici (deux
+    // saisies dans la même milliseconde gardent leur ordre de saisie).
+    let last = 0;
+    if (t && t.scores && t.draw) Object.keys(t.scores).forEach((k) => { const r = t.scores[k]; if (r && r.draw === t.draw.id && Number.isFinite(r.f) && r.f > last) last = r.f; });
+    return Math.max(now, last + 1);
   }
 
   /** Efface le score d'un match (correction par l'organisateur). */
@@ -790,7 +799,10 @@
     const m = cur.byId[matchId];
     const scores = Object.assign({}, t.scores || {});
     if (s1 == null) delete scores[matchId];
-    else if (m) scores[matchId] = { s1: parseInt(s1, 10), s2: parseInt(s2, 10), p1: m.p1, p2: m.p2, draw: t.draw.id, at: Date.now() };
+    else if (m) {
+      const now = Date.now();
+      scores[matchId] = { s1: parseInt(s1, 10), s2: parseInt(s2, 10), p1: m.p1, p2: m.p2, draw: t.draw.id, at: now, f: firstDone(m, scores[matchId], now, t) };
+    }
     const sim = computeState(Object.assign({}, t, { scores }));
     const has = (arr, x) => arr.indexOf(x) >= 0;
     const diff = {
@@ -827,6 +839,7 @@
       winnerStatus: playerStatus(t, m.winner),
       loserStatus: playerStatus(t, m.loser),
       phase1Completed: !before.phase1.done && after.phase1.done,
+      loserPicked: m.stage === "p1" && after.repechage.picks.indexOf(m.loser) >= 0 && before.repechage.picks.indexOf(m.loser) < 0,
       repechage: null,
       consolanteCreated: !before.consolante && !!after.consolante,
       champion: !before.champion && after.champion ? after.champion : null,

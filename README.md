@@ -16,14 +16,17 @@ Le nombre de joueurs est **libre** (32, 48, 49, 64…).
 1. **Phase 1** — tout le monde joue un match (paires tirées au sort). Avec un nombre
    impair de joueurs, un joueur est exempt et qualifié d'office.
 2. **Tableau final** — élimination directe. Sa taille est la **puissance de 2** juste
-   au-dessus du nombre de qualifiés ; les places manquantes sont comblées par les
-   **meilleurs perdants** de la phase 1 (*repêchage*) : points marqués dans la défaite,
-   puis différentiel, puis tirage au sort.
-   Un match se joue **dès que ses deux adversaires sont connus** — pas d'attente
-   générale ; seuls les matchs contre un repêché attendent la fin de la phase 1.
-3. **Consolante** — tous les perdants non repêchés, en élimination directe (quelques
-   exempts au premier tour si nécessaire pour revenir à une puissance de 2). Elle se
-   crée automatiquement à la fin de la phase 1.
+   au-dessus du nombre de qualifiés ; les places manquantes vont **aussitôt aux premiers
+   perdants** de la phase 1 (*repêchage*), dans l'ordre où leur match s'est terminé
+   (heure de la première saisie du score : une correction ne fait pas perdre sa place).
+   Un repêché n'est jamais placé face à celui qui vient de le battre (la place revient
+   alors au perdant suivant).
+   Un match se joue **dès que ses deux adversaires sont connus** — personne n'attend
+   la fin de la phase 1.
+3. **Consolante** — les perdants non repêchés, en élimination directe, remplie **au fil
+   de l'eau** : les deux premiers arrivés jouent ensemble aussitôt, puis les deux
+   suivants… ; les derniers arrivés reçoivent les exempts (directement au 2e tour, où
+   un vainqueur les attend déjà).
 
 | Joueurs | Phase 1 | Tableau final | Repêchés | Consolante |
 |---|---|---|---|---|
@@ -40,8 +43,8 @@ Le nombre de joueurs est **libre** (32, 48, 49, 64…).
    (principal et consolante) alternent toutes les 20 s et avancent à chaque résultat.
 3. **Scores** : à chaque fin de match, le résultat se saisit en deux gestes
    (liste « À jouer maintenant »). Une fenêtre indique aussitôt à chacun quoi faire :
-   jouer tout de suite contre tel joueur, attendre un adversaire, attendre le
-   repêchage, ou éliminé.
+   jouer tout de suite contre tel joueur, attendre un adversaire, repêché, direction
+   la consolante, ou éliminé.
 4. **Réglages** : points par phase et par tour, consolante, rotation de l'affichage,
    règlement, corrections de score (avec avertissement si des matchs suivants sont
    impactés), nouveau tirage.
