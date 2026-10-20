@@ -24,6 +24,8 @@
                        distingue une suppression d'une perte de données (base
                        Redis vidée / remplacée), où l'on recrée au lieu de refuser
      - tg:lk:<id>      verrou court (SET NX PX) par tournoi
+     - tg:lf           HASH   : id -> dernière heure de fin de match attribuée
+                       (ordre d'arrivée des perdants strictement croissant)
 
    Un score = un champ de hash : deux saisies simultanées sur deux
    matchs différents ne peuvent jamais s'écraser, et une édition de
@@ -42,11 +44,13 @@
      POST /api/store
        { op:"upsert", tournament, base?, baseUpdatedAt?, baseDraw? }  structure (scores retirés)
        { op:"delete", id }                       structure + scores
-       { op:"score", tid, matchId, record, overwrite? }   un score
+       { op:"score", tid, matchId, record, overwrite?, restore? }   un score (restore : renvoi
+                                  d'un score déjà connu, son heure de fin f est gardée)
        { op:"unscore", tid, matchId, draw?, at? }
        { op:"resetScores", tid, keepDraw }       purge des scores d'un autre tirage
        { op:"replaceAll", tournaments }          remplace tout (structures + scores)
-     -> { ok:true, configured:true, rev, rv?, prv? }  (+ ignored:"raison" si l'écriture
+     -> { ok:true, configured:true, rev, rv?, prv?, f? }  (f : heure de fin retenue par le
+        serveur pour un score ; + ignored:"raison" si l'écriture
         a été volontairement écartée, voir ci-dessous ; + current: score en place
         pour ignored "exists" / "older")
 
@@ -119,6 +123,7 @@ let credIdx = 0;                         // base en service (bascule si elle a d
 const K_IDS = "tg:ids";
 const K_REV = "tg:rev";
 const K_RV = "tg:rv";
+const K_LF = "tg:lf";                    // HASH id -> dernière heure de fin attribuée (strictement croissante)
 const kT = (id) => "tg:t:" + id;
 const kS = (id) => "tg:s:" + id;
 const kL = (id) => "tg:lk:" + id;        // verrou court par tournoi
@@ -467,6 +472,7 @@ function done(res, r) {
   if (hasOwn(r, "prv")) body.prv = r.prv == null ? "0" : String(r.prv);
   if (r.current) body.current = r.current;
   if (r.recreated) body.recreated = true;
+  if (typeof r.f === "number") body.f = r.f;
   return res.status(200).json(body);
 }
 
@@ -712,7 +718,7 @@ async function opDelete(body) {
     const [curJson] = await redis([["GET", kT(id)]], lk.left());
     const cmds = [];
     if (needsBackup(curJson)) cmds.push(["SET", kBak(id), String(curJson), "NX"]);
-    cmds.push(["DEL", kT(id), kS(id)], ["SREM", K_IDS, id], ["HDEL", K_RV, id], ["SET", kDel(id), "1", "EX", TOMB_S], ["INCR", K_REV]);
+    cmds.push(["DEL", kT(id), kS(id)], ["SREM", K_IDS, id], ["HDEL", K_RV, id], ["HDEL", K_LF, id], ["SET", kDel(id), "1", "EX", TOMB_S], ["INCR", K_REV]);
     const iRev = cmds.length - 1;
     const out = await redisTx(cmds.concat(lk.unlock()), lk.left());
     return { rev: out[iRev] };
@@ -729,25 +735,41 @@ async function opScore(body) {
   if (!rec) bad("Score invalide : { s1, s2 } entiers 0..99, p1/p2/draw identifiants, at nombre.");
   const overwrite = body.overwrite === true;
   return withLock(tid, async (lk) => {
-    const [structJson, curJson, rev0, prv, tomb] = await redis([["GET", kT(tid)], ["HGET", kS(tid), mid], ["GET", K_REV], ["HGET", K_RV, tid], ["EXISTS", kDel(tid)]], lk.left());
+    const [structJson, curJson, rev0, prv, tomb, lastF] = await redis([["GET", kT(tid)], ["HGET", kS(tid), mid], ["GET", K_REV], ["HGET", K_RV, tid], ["EXISTS", kDel(tid)], ["HGET", K_LF, tid]], lk.left());
     // Tournoi supprimé (ou absent) : aucune écriture (pas de hash de scores orphelin).
     if (structJson == null) return { rev: rev0, ignored: absentReason(tomb) };
+    const struct = parseJSON(structJson);
     // Score d'un tirage remplacé (ou tournoi sans tirage) : sans objet.
-    if (rec.draw !== drawIdOf(parseJSON(structJson))) return { rev: rev0, ignored: "staleDraw" };
+    if (rec.draw !== drawIdOf(struct)) return { rev: rev0, ignored: "staleDraw" };
     const cur = cleanRecord(parseJSON(curJson));
     if (cur && cur.draw === rec.draw) {
       const samePlayers = cur.p1 === rec.p1 && cur.p2 === rec.p2;
       // Même résultat (réessai, ou deux appareils d'accord) : rien à écrire.
-      if (samePlayers && cur.s1 === rec.s1 && cur.s2 === rec.s2) return { rev: rev0, rv: prv, prv };
+      if (samePlayers && cur.s1 === rec.s1 && cur.s2 === rec.s2) return { rev: rev0, rv: prv, prv, f: cur.f != null ? cur.f : cur.at };
       const sameDevice = !!(cur.by && rec.by && cur.by === rec.by);
       // La PREMIÈRE saisie gagne ; seule une correction volontaire la remplace.
       if (samePlayers && !overwrite && !sameDevice) return { rev: rev0, ignored: "exists", current: publicRecord(cur) };
       // Correction plus ancienne (arrivée en retard) : le plus récent gagne.
       if (cur.at > rec.at) return { rev: rev0, ignored: "older", current: publicRecord(cur) };
     }
+    // Heure de fin du match = heure du SERVEUR à la première réception du
+    // résultat : l'ordre d'arrivée des perdants (repêchage, consolante) est le
+    // même pour tous, et un téléphone resté hors ligne qui envoie son résultat
+    // en retard passe en fin de file au lieu de déloger un repêché qui joue
+    // déjà. Une correction (mêmes joueurs) garde l'heure d'origine.
+    // Score effacé puis ressaisi : il reprend son rang (struct.cleared). Renvoi
+    // d'un score déjà connu (base perdue puis repeuplée, restore) : on garde
+    // son heure d'origine. Sinon : maintenant, strictement après la précédente.
+    const same = cur && cur.draw === rec.draw && ((cur.p1 === rec.p1 && cur.p2 === rec.p2) || (cur.p1 === rec.p2 && cur.p2 === rec.p1));
+    const cl = isPlainObject(struct) && isPlainObject(struct.cleared) && isPlainObject(struct.cleared[mid]) ? struct.cleared[mid] : null;
+    const now = Math.max(Date.now(), toNum(lastF) + 1);
+    const restore = body.restore === true && !(cur && cur.draw === rec.draw) && isTime(rec.f) && rec.f > 0 && rec.f <= now;
+    if (same) rec.f = cur.f != null ? cur.f : cur.at;
+    else if (cl && cl.d === rec.draw && isTime(cl.f) && cl.f > 0) rec.f = cl.f;
+    else if (!restore) rec.f = now;
     const tok = newToken();
-    const out = await redisTx([["HSET", kS(tid), mid, JSON.stringify(rec)], ["HSET", K_RV, tid, tok], ["INCR", K_REV]].concat(lk.unlock()), lk.left());
-    return { rev: out[2], rv: tok, prv };
+    const out = await redisTx([["HSET", kS(tid), mid, JSON.stringify(rec)], ["HSET", K_RV, tid, tok], ["INCR", K_REV], ["HSET", K_LF, tid, String(Math.max(toNum(lastF), rec.f))]].concat(lk.unlock()), lk.left());
+    return { rev: out[2], rv: tok, prv, f: rec.f };
   });
 }
 

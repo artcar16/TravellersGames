@@ -163,6 +163,8 @@
         .map(normPlayer);
       t.scores = cleanScores(t.scores);
       t.draw = cleanDraw(t.draw);
+      const cl = cleanCleared(t.cleared);
+      if (cl) t.cleared = cl; else delete t.cleared;
       return t;
     }
     // Ancien format (v1) : on garde nom, date, joueurs, règlement.
@@ -221,6 +223,16 @@
       if (r.f != null && Number.isFinite(Number(r.f)) && Number(r.f) > 0) out[k].f = Number(r.f);
     });
     return out;
+  }
+  /** Rangs d'arrivée des scores effacés : { matchId: { d: tirage, f: heure } } (ou null). */
+  function cleanCleared(c) {
+    if (!c || typeof c !== "object" || Array.isArray(c)) return null;
+    const out = {};
+    Object.keys(c).forEach((k) => {
+      const x = c[k];
+      if (ID_RX.test(k) && x && typeof x === "object" && typeof x.d === "string" && ID_RX.test(x.d) && Number.isFinite(Number(x.f)) && Number(x.f) > 0) out[k] = { d: x.d, f: Number(x.f) };
+    });
+    return Object.keys(out).length ? out : null;
   }
   /** Tirage validé (forme stricte) — sinon null. Protège contre des données injectées. */
   function cleanDraw(d) {
@@ -410,6 +422,7 @@
 
     t.draw = { id: uid("drw"), at: Date.now(), n: ids.length, size: P, qualifiers: W, repechage: P - W, p1, exempt, slots, tiebreak, consOrder };
     t.scores = {};
+    delete t.cleared;
     touch(t);
     commit("tirage");
     // Nettoyage serveur des scores d'un AUTRE tirage (jamais ceux de celui-ci).
@@ -423,6 +436,7 @@
     if (!t) return { error: "Tournoi introuvable." };
     t.draw = null;
     t.scores = {};
+    delete t.cleared;
     touch(t);
     commit("annulation tirage");
     if (cloudOn() && TG.Cloud.pushResetScores) TG.Cloud.pushResetScores(t.id, null);
@@ -527,13 +541,16 @@
 
     // ----- Repêchage AU FIL DE L'EAU -----
     // Les perdants de phase 1 sont pris dans l'ordre où leur match s'est
-    // terminé (heure de la PREMIÈRE saisie : une correction de score ne fait
-    // pas perdre sa place) : les R premiers sont repêchés aussitôt (place
-    // libre de plus petit numéro), les suivants partent aussitôt en
-    // consolante. Un repêché n'est jamais placé face au joueur qui vient de
-    // le battre : si la seule place restante est celle-là, il va en
-    // consolante et la place revient au perdant suivant.
-    // Une place n'est jamais réattribuée quand d'autres matchs se terminent.
+    // terminé (heure f de la PREMIÈRE saisie, fixée par le serveur ; une
+    // correction la garde) : les R premiers sont repêchés aussitôt, les
+    // suivants partent aussitôt en consolante. Chaque repêché prend la place
+    // dont l'adversaire attend déjà (depuis le plus longtemps), sinon la place
+    // libre de plus petit numéro — jamais face au joueur qui vient de le
+    // battre (si la seule place libre est celle-là, il va en consolante et la
+    // place revient au perdant suivant). Chaque décision ne dépend que des
+    // arrivées précédentes : une place attribuée ne bouge plus.
+    // Un score de phase 1 EFFACÉ garde son rang d'arrivée et sa place
+    // (t.cleared) : rien ne se décale, et le ressaisir remet tout en place.
     const R = d.slots.filter((x) => x.kind === "rep").length;
     const P = d.slots.length;
     const K = log2(P);
@@ -543,26 +560,60 @@
     d.slots.forEach((sl, j) => { if (sl.kind === "rep") repSlots.push({ j, k: sl.k }); });
     repSlots.sort((a, b) => a.k - b.k);
     const facesOwnMatch = (r, m) => { const o = d.slots[r.j ^ 1]; return !!o && o.kind === "match" && o.ref === m.id; };
-    const arrivals = p1.filter((m) => m.status === "done").sort((x, y) => (x.f - y.f) || (x.index - y.index));
-    const repAssign = {};                    // k -> pid
-    const picks = [], consQueue = [];
-    const ranking = arrivals.map((m, i) => {
-      const lostAs1 = m.loser === m.p1;
-      const pf = lostAs1 ? m.score1 : m.score2;
-      const pa = lostAs1 ? m.score2 : m.score1;
-      const x = { pid: m.loser, matchId: m.id, pf, pa, diff: pf - pa, rank: i + 1, at: m.f || null, picked: false, inZone: false, k: null };
-      if (picks.length < R) {
-        const free = repSlots.find((r) => !repAssign[r.k] && !facesOwnMatch(r, m));
-        if (free) {
-          repAssign[free.k] = m.loser; picks.push(m.loser);
-          x.picked = x.inZone = true; x.k = free.k;
+    const cleared = t.cleared && typeof t.cleared === "object" ? t.cleared : {};
+    const events = [];
+    p1.forEach((m) => {
+      if (m.status === "done") { events.push({ m, f: m.f, held: false }); return; }
+      const c = cleared[m.id];
+      if (c && c.d === d.id && Number.isFinite(c.f) && c.f > 0) events.push({ m, f: c.f, held: true });
+    });
+    events.sort((x, y) => (x.f - y.f) || (x.m.index - y.m.index));
+    const evPos = {};
+    events.forEach((e, i) => { evPos[e.m.id] = i; });
+    /** Depuis quand l'adversaire d'une place attend-il (exempt : depuis le début) ? */
+    const waitSince = (r, i) => {
+      const o = d.slots[r.j ^ 1];
+      if (!o) return Infinity;
+      if (o.kind === "bye") return -1;
+      if (o.kind === "match" && evPos[o.ref] != null && evPos[o.ref] < i) return events[evPos[o.ref]].f;
+      return Infinity;
+    };
+    const repAssign = {}, reserved = {};    // k -> pid / k -> matchId (score effacé)
+    const picks = [], consQueue = [];        // consQueue : pid, ou null (siège réservé)
+    let taken = 0;
+    const ranking = events.map((e, i) => {
+      const m = e.m;
+      const pid = e.held ? null : m.loser;
+      const x = { pid, matchId: m.id, rank: i + 1, at: e.f, picked: false, inZone: false, k: null, held: e.held, skipped: false };
+      if (!e.held) {
+        const lostAs1 = m.loser === m.p1;
+        x.pf = lostAs1 ? m.score1 : m.score2; x.pa = lostAs1 ? m.score2 : m.score1; x.diff = x.pf - x.pa;
+      }
+      if (taken < R) {
+        let best = null, bestW = Infinity;
+        repSlots.forEach((r) => {
+          if (repAssign[r.k] || reserved[r.k] || facesOwnMatch(r, m)) return;
+          const w = waitSince(r, i);
+          if (!best || w < bestW) { best = r; bestW = w; }
+        });
+        if (best) {
+          taken++;
+          x.k = best.k;
+          if (e.held) reserved[best.k] = m.id;
+          else { repAssign[best.k] = pid; picks.push(pid); x.picked = x.inZone = true; }
           return x;
         }
+        x.skipped = !e.held;                   // seule place restante : face à son vainqueur
       }
-      consQueue.push(m.loser);
+      consQueue.push(pid);
       return x;
     });
-    st.repechage = { needed: R, resolved: picks.length >= R, ranking, picks, assign: repAssign };
+    // File d'attente des qualifiés qui attendent leur repêché (le 1er aura le prochain perdant).
+    const waiting = repSlots.filter((r) => !repAssign[r.k] && !reserved[r.k])
+      .map((r) => ({ k: r.k, since: waitSince(r, events.length) }))
+      .filter((w) => w.since !== Infinity)
+      .sort((a, b) => (a.since - b.since) || (a.k - b.k));
+    st.repechage = { needed: R, resolved: picks.length >= R, ranking, picks, assign: repAssign, reserved, waiting };
 
     // ----- Tableau final -----
     st.leaves = d.slots.map((sl, i) => {
@@ -625,23 +676,44 @@
     // 2e tour, où un vainqueur les attend déjà).
     const Cn = p1.length - R;
     if (s.consolante && Cn >= 2) {
-      const Pc = nextPow2(Cn), Kc = log2(Pc), byes = Pc - Cn;
+      const Pc = nextPow2(Cn), Kc = log2(Pc);
       const posOf = {};
       seedOrder(Pc).forEach((seed, pos) => { posOf[seed] = pos; });
-      const fill = [];
-      for (let sd = byes + 1; sd <= Pc / 2; sd++) fill.push(posOf[sd], posOf[Pc + 1 - sd]);
-      for (let sd = 1; sd <= byes; sd++) fill.push(posOf[sd]);
       const seats = new Array(Pc).fill(null);
       for (let sd = Cn + 1; sd <= Pc; sd++) seats[posOf[sd]] = "BYE";
-      const entrants = consQueue.slice(0, Cn);
-      entrants.forEach((pid, i) => { seats[fill[i]] = pid; });
+      // Ordre de remplissage : deux arrivées successives se rencontrent tout
+      // de suite. D'abord les vrais matchs du 1er tour (ceux dont le vainqueur
+      // affrontera un exempt en premier), puis les exempts qui se rencontrent
+      // entre eux au 2e tour (par paires), puis ceux qui affronteront le
+      // vainqueur d'un vrai match (il les attend déjà).
+      const isBye = (i) => seats[2 * i] === "BYE" || seats[2 * i + 1] === "BYE";
+      const freeOf = (i) => (seats[2 * i] === "BYE" ? 2 * i + 1 : 2 * i);
+      const fill = [];
+      if (Pc === 2) fill.push(0, 1);
+      else {
+        const realFirst = [], realLater = [], byePairs = [], byeLast = [];
+        for (let j = 0; j < Pc / 4; j++) {
+          const a = 2 * j, b = 2 * j + 1, ba = isBye(a), bb = isBye(b);
+          if (!ba && !bb) realLater.push(a, b);
+          else if (ba && bb) byePairs.push(freeOf(a), freeOf(b));
+          else { realFirst.push(ba ? b : a); byeLast.push(freeOf(ba ? a : b)); }
+        }
+        realFirst.concat(realLater).forEach((i) => fill.push(2 * i, 2 * i + 1));
+        byePairs.concat(byeLast).forEach((pos) => fill.push(pos));
+      }
+      const queue = consQueue.slice(0, Cn);
+      queue.forEach((pid, i) => { if (pid) seats[fill[i]] = pid; });
+      const entrants = queue.filter(Boolean);
+      const qOf = {};                          // siège -> rang d'arrivée en consolante
+      fill.forEach((pos, i) => { qOf[pos] = i; });
       const rounds = [];
       let prev = [];
       for (let i = 0; i < Pc / 2; i++) {
         const m = mk("cons", 1, i, "c1-" + i, s.consolePoints);
         m.p1 = seats[2 * i]; m.p2 = seats[2 * i + 1];
-        m.src1 = { type: seats[2 * i] === "BYE" ? "bye" : "loser" };
-        m.src2 = { type: seats[2 * i + 1] === "BYE" ? "bye" : "loser" };
+        m.src1 = seats[2 * i] === "BYE" ? { type: "bye" } : { type: "loser", q: qOf[2 * i] };
+        m.src2 = seats[2 * i + 1] === "BYE" ? { type: "bye" } : { type: "loser", q: qOf[2 * i + 1] };
+        if (isBye(i)) m.byeSeat = true;        // place d'exempt : jamais un vrai match
         settle(m);
         prev.push(m);
       }
@@ -662,12 +734,12 @@
       }
       const fin = rounds[Kc - 1][0];
       st.consolante = {
-        rounds, size: Pc, totalRounds: Kc, entrants, expected: Cn,
+        rounds, size: Pc, totalRounds: Kc, entrants, expected: Cn, filled: queue.length,
         champion: fin.status === "done" && fin.winner !== "BYE" ? fin.winner : null,
       };
     }
 
-    const real = all.filter((m) => !m.bye);
+    const real = all.filter((m) => !m.bye && !m.byeSeat);
     st.progress = {
       played: real.filter((m) => m.status === "done").length,
       total: real.length,
@@ -757,7 +829,11 @@
    */
   function firstDone(m, prev, now, t) {
     if (m && m.status === "done" && Number.isFinite(m.f) && m.f > 0) return m.f;
-    if (prev && Number.isFinite(prev.f) && prev.f > 0 && m && ((prev.p1 === m.p1 && prev.p2 === m.p2) || (prev.p1 === m.p2 && prev.p2 === m.p1))) return prev.f;
+    const did = t && t.draw && t.draw.id;
+    if (prev && prev.draw === did && Number.isFinite(prev.f) && prev.f > 0 && m && ((prev.p1 === m.p1 && prev.p2 === m.p2) || (prev.p1 === m.p2 && prev.p2 === m.p1))) return prev.f;
+    // Score effacé puis ressaisi : il reprend son rang d'arrivée.
+    const c = m && t && t.cleared && t.cleared[m.id];
+    if (c && c.d === did && Number.isFinite(c.f) && c.f > 0) return c.f;
     // Nouveau résultat : strictement après tous ceux déjà connus ici (deux
     // saisies dans la même milliseconde gardent leur ordre de saisie).
     let last = 0;
@@ -765,24 +841,60 @@
     return Math.max(now, last + 1);
   }
 
+  /**
+   * Le cloud a fixé l'heure de fin d'un score que l'on vient d'envoyer : on
+   * l'adopte (si le score local est toujours celui-là), sans renvoi.
+   */
+  function adoptScoreF(tid, matchId, rec, f) {
+    const t = getTournament(tid);
+    const cur = t && t.scores && t.scores[matchId];
+    if (!cur || !rec || !Number.isFinite(f) || cur.f === f) return;
+    if (cur.draw !== rec.draw || cur.at !== rec.at || cur.s1 !== rec.s1 || cur.s2 !== rec.s2 || cur.p1 !== rec.p1 || cur.p2 !== rec.p2) return;
+    cur.f = f;
+    persistLocal();
+    emit();
+  }
+
   /** Efface le score d'un match (correction par l'organisateur). */
   function clearScore(tid, matchId) {
     const t = getTournament(tid);
     if (!t || !t.scores || !t.scores[matchId]) return { error: "Aucun score à effacer." };
+    const keep = clearedEntry(t, matchId);
     delete t.scores[matchId];
-    persistLocal();
-    emit();
+    if (keep) {
+      // Le match garde son rang d'arrivée (repêchage / consolante) : partagé avec la structure.
+      t.cleared = Object.assign({}, t.cleared || {});
+      t.cleared[matchId] = keep;
+      touch(t);
+      commit("effacement");
+    } else {
+      persistLocal();
+      emit();
+    }
     if (cloudOn() && TG.Cloud.pushUnscore) TG.Cloud.pushUnscore(t.id, matchId);
     return { ok: true };
+  }
+  /** Rang d'arrivée à garder si l'on efface ce score (match de phase 1 terminé). */
+  function clearedEntry(t, matchId) {
+    if (!t.draw) return null;
+    const m = state(t).byId[matchId];
+    if (!m || m.stage !== "p1" || m.status !== "done" || !(Number.isFinite(m.f) && m.f > 0)) return null;
+    return { d: t.draw.id, f: m.f };
+  }
+  /** Copie du tournoi telle qu'elle serait après effacement de ce score. */
+  function withoutScore(t, matchId) {
+    const c = Object.assign({}, t, { scores: Object.assign({}, t.scores || {}) });
+    const keep = clearedEntry(t, matchId);
+    delete c.scores[matchId];
+    if (keep) { c.cleared = Object.assign({}, t.cleared || {}); c.cleared[matchId] = keep; }
+    return c;
   }
 
   /** Matchs déjà joués qui seraient annulés si l'on effaçait ce score. */
   function clearImpact(t, matchId) {
     const cur = state(t);
     if (!cur || !t.scores || !t.scores[matchId]) return [];
-    const clone = Object.assign({}, t, { scores: Object.assign({}, t.scores) });
-    delete clone.scores[matchId];
-    const sim = computeState(clone);
+    const sim = computeState(withoutScore(t, matchId));
     return cur.all.filter((m) => m.id !== matchId && !m.bye && m.status === "done" && !(sim.byId[m.id] && sim.byId[m.id].status === "done" && sim.byId[m.id].winner === m.winner));
   }
 
@@ -794,16 +906,20 @@
    */
   function simulate(t, matchId, s1, s2) {
     const cur = state(t);
-    const empty = { none: true, phase1Reopened: false, phase1Completed: false, picksOut: [], picksIn: [], consolanteRemoved: false, consolanteCreated: false, consolanteChanged: false, cancelled: [], reassigned: [], winnerChanged: false, championChanged: false };
+    const empty = { none: true, phase1Reopened: false, phase1Completed: false, picksOut: [], picksIn: [], consolanteRemoved: false, consolanteCreated: false, consolanteChanged: false, consIn: [], consOut: [], cancelled: [], reassigned: [], winnerChanged: false, championChanged: false };
     if (!cur || !cur.drawn) return empty;
     const m = cur.byId[matchId];
-    const scores = Object.assign({}, t.scores || {});
-    if (s1 == null) delete scores[matchId];
-    else if (m) {
-      const now = Date.now();
-      scores[matchId] = { s1: parseInt(s1, 10), s2: parseInt(s2, 10), p1: m.p1, p2: m.p2, draw: t.draw.id, at: now, f: firstDone(m, scores[matchId], now, t) };
+    let next;
+    if (s1 == null) next = withoutScore(t, matchId);
+    else {
+      const scores = Object.assign({}, t.scores || {});
+      if (m) {
+        const now = Date.now();
+        scores[matchId] = { s1: parseInt(s1, 10), s2: parseInt(s2, 10), p1: m.p1, p2: m.p2, draw: t.draw.id, at: now, f: firstDone(m, scores[matchId], now, t) };
+      }
+      next = Object.assign({}, t, { scores });
     }
-    const sim = computeState(Object.assign({}, t, { scores }));
+    const sim = computeState(next);
     const has = (arr, x) => arr.indexOf(x) >= 0;
     const diff = {
       phase1Reopened: cur.phase1.done && !sim.phase1.done,
@@ -813,6 +929,8 @@
       consolanteRemoved: !!cur.consolante && !sim.consolante,
       consolanteCreated: !cur.consolante && !!sim.consolante,
       consolanteChanged: !!cur.consolante && !!sim.consolante && JSON.stringify(cur.consolante.entrants) !== JSON.stringify(sim.consolante.entrants),
+      consIn: sim.consolante ? sim.consolante.entrants.filter((p) => !cur.consolante || !has(cur.consolante.entrants, p)) : [],
+      consOut: cur.consolante ? cur.consolante.entrants.filter((p) => !sim.consolante || !has(sim.consolante.entrants, p)) : [],
       cancelled: cur.all.filter((x) => x.id !== matchId && !x.bye && x.status === "done" &&
         !(sim.byId[x.id] && sim.byId[x.id].status === "done" && sim.byId[x.id].winner === x.winner)),
       reassigned: cur.all.filter((x) => {
@@ -884,7 +1002,7 @@
     addPlayer, addPlayers, updatePlayer, removePlayer, playerName,
     plan, drawTournament, resetDraw,
     state, playerStatus, playerStats, roundName,
-    recordScore, clearScore, clearImpact, simulate,
+    recordScore, clearScore, clearImpact, simulate, adoptScoreF,
     onStorageError, getStorageError,
     replaceAll, importTournament, structureOf, migrate,
     defaultSettings, normSettings,

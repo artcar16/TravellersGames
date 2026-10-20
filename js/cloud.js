@@ -88,6 +88,7 @@
 
   let syncTimer = null, retryTimer = null, pollTimer = null, initTimer = null;
   let flushing = null, flushAgain = false;
+  let sentScore = false;         // un score vient de partir : relire aussitôt ceux des autres
   let checking = null, checkAgain = false;
   let failures = 0;
   let forceRefresh = false;      // recharger au prochain sondage (même révision)
@@ -541,6 +542,7 @@
       prv: typeof j.prv === "string" ? j.prv : null,
       current: isObj(j.current) ? j.current : null,
       recreated: j.recreated === true,
+      f: typeof j.f === "number" ? j.f : null,
     };
   }
   async function fetchState() {
@@ -988,7 +990,7 @@
     // l'horloge de cet appareil retarde.
     const seen = seenAt(tid, matchId);
     if (seen != null && !(rec.at > seen)) rec.at = seen + 1;
-    const op = { op: "score", tid, matchId, record: rec };
+    const op = { op: "score", tid, matchId, record: rec, fresh: true };   // saisie : heure de fin fixée par le serveur
     if (opts && opts.overwrite) op.overwrite = true;
     (myScores[tid] = myScores[tid] || {})[matchId] = rec;
     enqueue(op);
@@ -1070,6 +1072,9 @@
       } finally {
         flushing = null;
         if (forceRefresh) setTimeout(() => { checkRemote(true); }, 0);
+        // Résultat envoyé : on relit tout de suite ceux saisis ailleurs au même
+        // moment (ordre d'arrivée des perdants à jour en ~1 s au lieu de 4 s).
+        else if (sentScore) { sentScore = false; setTimeout(() => { checkRemote(); }, 0); }
       }
     })();
     return flushing;
@@ -1146,6 +1151,7 @@
       if (op.record.draw !== cur) return null;   // score d'un tirage remplacé
       const w = { op: "score", tid: op.tid, matchId: op.matchId, record: op.record };
       if (op.overwrite) w.overwrite = true;
+      if (!op.fresh) w.restore = true;   // renvoi d'un score déjà connu : son heure de fin est gardée
       return w;
     }
     if (op.op === "unscore") {
@@ -1253,6 +1259,7 @@
       }
       delete opFails[op.k];
       removeOp(op.k);
+      if (op.op === "score") sentScore = true;
       if (r.permanent) { console.warn("Cloud : opération refusée", wire, r.error); continue; }
       if (op.op === "delete") {
         if (typeof r.rev === "number") structAck[op.tid] = r.rev;
@@ -1262,6 +1269,12 @@
         continue;
       }
       if (r.ignored) { onIgnored(op, r); continue; }
+      // Heure de fin retenue par le serveur (ordre du repêchage commun à tous).
+      if (op.op === "score" && typeof r.f === "number" && r.f !== op.record.f) {
+        const local = clone(op.record);
+        op.record.f = r.f;
+        if (TG.Store.adoptScoreF) TG.Store.adoptScoreF(op.tid, op.matchId, local, r.f);
+      }
       if (typeof r.rev === "number") {
         acked.push(Object.assign({}, op, { rev: r.rev }));
         if (acked.length > 2000) acked.splice(0, acked.length - 2000);

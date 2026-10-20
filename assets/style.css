@@ -846,3 +846,6 @@ body.fullbleed .app { max-width: none; margin: 0; padding: 0; }
   .recent-row { grid-template-columns: 150px minmax(0, 1fr) auto auto; grid-template-areas: "stage score time edit"; gap: 10px 14px; }
 }
 @keyframes sheet { from { transform: translateY(40px); opacity: 0; } }
+.pc-status.updated .status-card { animation: popin .5s var(--ease); box-shadow: 0 0 0 2px var(--gold-soft); }
+.rep-table .rep-why { font-size: .78rem; line-height: 1.3; margin-top: 2px; }
+.sc-why { display: block; margin-top: 4px; font-size: .86em; color: var(--muted); }
