@@ -80,35 +80,40 @@
 "use strict";
 
 /**
- * Résout l'URL REST + le token d'écriture du magasin Redis, quel que soit
- * le nommage des variables d'environnement. On gère les noms standards
- * (Vercel KV, Upstash) puis, à défaut, tout couple « *REST*URL » / « *REST*TOKEN »
- * — utile si un préfixe personnalisé a été appliqué lors du branchement.
- * On exclut systématiquement les tokens en lecture seule (READ_ONLY).
+ * Bases Redis déclarées (URL REST + token d'écriture), quel que soit le
+ * nommage des variables d'environnement : noms standards (Vercel KV,
+ * Upstash), puis tout couple « <préfixe>…REST…URL » / même nom en …TOKEN
+ * (préfixe personnalisé choisi lors du branchement), puis à défaut le
+ * premier « *REST*URL » / « *REST*TOKEN ». Tokens en lecture seule exclus.
+ * Plusieurs bases possibles : une base gratuite Upstash inactive est
+ * ARCHIVÉE (son adresse disparaît) ; si l'on en branche une nouvelle sans
+ * supprimer les anciennes variables, on bascule sur celle qui répond.
  */
 function resolveCreds() {
   const env = process.env;
-  const known = [
-    ["KV_REST_API_URL", "KV_REST_API_TOKEN"],
-    ["UPSTASH_REDIS_REST_URL", "UPSTASH_REDIS_REST_TOKEN"],
-  ];
-  for (const [u, t] of known) {
-    if (env[u] && env[t]) return { url: env[u], token: env[t] };
+  const out = [];
+  const add = (u, t) => {
+    const url = String(env[u] || "").replace(/\/+$/, ""), token = env[t] || "";
+    if (url && token && /^https?:\/\//.test(url) && !out.some((c) => c.url === url && c.token === token)) out.push({ url, token, name: u });
+  };
+  add("KV_REST_API_URL", "KV_REST_API_TOKEN");
+  add("UPSTASH_REDIS_REST_URL", "UPSTASH_REDIS_REST_TOKEN");
+  const keys = Object.keys(env).sort();
+  keys.filter((k) => /REST.*URL$/i.test(k)).forEach((k) => add(k, k.replace(/URL$/i, (m) => (m === "URL" ? "TOKEN" : "token"))));
+  if (!out.length) {
+    const urlKey =
+      keys.find((k) => /REST.*URL$/i.test(k) && /^https?:\/\//.test(env[k] || "")) ||
+      keys.find((k) => /URL$/i.test(k) && /^https:\/\//.test(env[k] || "") && /REDIS|KV|UPSTASH|STORAGE/i.test(k));
+    const tokenKey =
+      keys.find((k) => /REST.*TOKEN$/i.test(k) && !/READ_ONLY/i.test(k)) ||
+      keys.find((k) => /TOKEN$/i.test(k) && !/READ_ONLY/i.test(k) && /REDIS|KV|UPSTASH|STORAGE/i.test(k));
+    if (urlKey && tokenKey) add(urlKey, tokenKey);
   }
-  const keys = Object.keys(env);
-  const isHttps = (v) => typeof v === "string" && /^https:\/\//.test(v);
-  const urlKey =
-    keys.find((k) => /REST.*URL$/i.test(k) && isHttps(env[k])) ||
-    keys.find((k) => /URL$/i.test(k) && isHttps(env[k]) && /REDIS|KV|UPSTASH|STORAGE/i.test(k));
-  const tokenKey =
-    keys.find((k) => /REST.*TOKEN$/i.test(k) && !/READ_ONLY/i.test(k)) ||
-    keys.find((k) => /TOKEN$/i.test(k) && !/READ_ONLY/i.test(k) && /REDIS|KV|UPSTASH|STORAGE/i.test(k));
-  return { url: urlKey ? env[urlKey] : "", token: tokenKey ? env[tokenKey] : "" };
+  return out;
 }
 
-const _creds = resolveCreds();
-const REDIS_URL = String(_creds.url || "").replace(/\/+$/, "");
-const REDIS_TOKEN = _creds.token || "";
+const CREDS = resolveCreds();
+let credIdx = 0;                         // base en service (bascule si elle a disparu)
 
 const K_IDS = "tg:ids";
 const K_REV = "tg:rev";
@@ -134,7 +139,7 @@ const MAX_STRUCT_CHARS = 900000;     // ~0,9 Mo par tournoi (un tournoi de 128 j
 const MAX_TOURNAMENTS = 300;         // replaceAll
 
 function configured() {
-  return !!(REDIS_URL && REDIS_TOKEN);
+  return CREDS.length > 0;
 }
 
 // ---------------------------------------------------------------
@@ -161,7 +166,37 @@ function budget(ms) {
 // ---------------------------------------------------------------
 //  Accès Redis (API REST Upstash)
 // ---------------------------------------------------------------
+/** Cause réseau lisible (Node : e.cause.code). */
+function netCause(e) {
+  const c = (e && e.cause) || {};
+  return String(c.code || c.errno || (e && e.code) || (e && e.message) || "");
+}
+
+/**
+ * Appel Redis. Si la base en service est introuvable (adresse disparue,
+ * connexion refusée) ou refuse la clé, on essaie les autres bases déclarées
+ * et l'on garde la première qui répond.
+ */
 async function call(path, commands, timeoutMs) {
+  const t0 = Date.now();
+  let lastErr = null;
+  for (let n = 0; n < CREDS.length; n++) {
+    const i = (credIdx + n) % CREDS.length;
+    try {
+      const left = n ? Math.max(250, (Number(timeoutMs) || REDIS_TIMEOUT_MS) - (Date.now() - t0)) : timeoutMs;
+      const r = await callOne(CREDS[i], path, commands, left);
+      if (i !== credIdx) credIdx = i;
+      return r;
+    } catch (e) {
+      if (!(e && e.switchable) || CREDS.length < 2) throw e;
+      lastErr = e;
+    }
+  }
+  throw lastErr;
+}
+
+async function callOne(cred, path, commands, timeoutMs) {
+  const REDIS_URL = cred.url, REDIS_TOKEN = cred.token;
   const ms = Math.max(250, Math.min(REDIS_TIMEOUT_MS, Number(timeoutMs) || REDIS_TIMEOUT_MS));
   const ctl = typeof AbortController === "function" ? new AbortController() : null;
   const timer = ctl ? setTimeout(() => { try { ctl.abort(); } catch (e) { /* */ } }, ms) : null;
@@ -179,12 +214,26 @@ async function call(path, commands, timeoutMs) {
       });
     } catch (e) {
       if (ctl && ctl.signal.aborted) throw new Unavailable("Base de données indisponible (délai dépassé), réessayez.");
-      throw new Unavailable("Base de données injoignable, réessayez.");
+      const cause = netCause(e);
+      const gone = /ENOTFOUND/i.test(cause);   // adresse inexistante (base supprimée / archivée)
+      const err = new Unavailable(gone
+        ? "Base de données introuvable : son adresse (" + hostOf(REDIS_URL) + ") n'existe plus. Une base Upstash gratuite inutilisée " +
+          "pendant 14 jours est archivée : il faut en recréer une (Vercel → Storage) et la connecter au projet."
+        : "Base de données injoignable (" + (cause || "réseau") + "), réessayez.");
+      // Bascule seulement si cette base a DISPARU (jamais sur une coupure
+      // passagère : deux bases vivantes ne doivent pas recevoir chacune une
+      // partie des saisies).
+      err.switchable = gone;
+      throw err;
     }
     if (!res.ok) {
       const txt = await res.text().catch(() => "");
       const known = upstashError(res.status, txt);
-      if (known) throw new Unavailable(known);
+      if (known) {
+        const err = new Unavailable(known);
+        err.switchable = res.status === 401 || res.status === 403;
+        throw err;
+      }
       const err = new Error("Redis " + res.status + " " + String(txt).slice(0, 200));
       err.status = res.status;
       throw err;
@@ -225,6 +274,8 @@ function upstashError(status, txt) {
   }
   return null;
 }
+
+function hostOf(u) { try { return new URL(u).host; } catch (e) { return "?"; } }
 
 /** Pile de commandes (exécutées dans l'ordre, non atomique). */
 function redis(commands, timeoutMs) { return call("/pipeline", commands, timeoutMs); }
@@ -499,9 +550,9 @@ async function health(res) {
   const t0 = Date.now();
   try {
     await redis([["GET", K_REV]], budget()());
-    return res.status(200).json({ configured: true, ok: true, redisMs: Date.now() - t0, build: BUILD });
+    return res.status(200).json({ configured: true, ok: true, redisMs: Date.now() - t0, build: BUILD, db: CREDS[credIdx].name, dbs: CREDS.length });
   } catch (e) {
-    return res.status(503).json({ configured: true, ok: false, redisMs: Date.now() - t0, build: BUILD, error: String((e && e.message) || e) });
+    return res.status(503).json({ configured: true, ok: false, redisMs: Date.now() - t0, build: BUILD, dbs: CREDS.length, error: String((e && e.message) || e) });
   }
 }
 
@@ -783,7 +834,11 @@ module.exports = async (req, res) => {
 
     if (req.method === "GET") {
       const q = req.query || {};
-      if (q.health === "1" || q.health === "true") return health(res);
+      // ?health=1, ou tâche planifiée Vercel (vercel.json « crons ») : une
+      // lecture par jour suffit pour que la base gratuite ne soit jamais
+      // archivée pour inactivité entre deux tournois.
+      const cron = /vercel-cron/i.test(String((req.headers && req.headers["user-agent"]) || ""));
+      if (q.health === "1" || q.health === "true" || cron) return health(res);
       if (q.meta === "1" || q.meta === "true") {
         const since = q.since != null && q.since !== "" && Number.isFinite(Number(q.since)) ? Number(q.since) : null;
         const m = await readMeta(since, budget());

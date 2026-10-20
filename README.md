@@ -90,6 +90,20 @@ sans réseau est mis en file et envoyé dès le retour de la connexion.
 | `POST` | `{ op:"resetScores", tid, keepDraw }` | purge les scores d'un ancien tirage |
 | `POST` | `{ op:"replaceAll", tournaments }` | remplace toute la base |
 
+### Base de données endormie (offre gratuite Upstash)
+
+Une base Upstash gratuite qui ne reçoit aucune requête pendant ~14 jours est
+**archivée** : son adresse disparaît et l'app affiche « Base de données
+introuvable ». Pour l'éviter, `vercel.json` déclare une tâche planifiée
+quotidienne (`crons`) qui interroge `/api/store` une fois par jour.
+
+Si c'est déjà arrivé : Vercel → projet → **Storage** → créer une base
+**Upstash for Redis** (gratuite) → **Connect** au projet → **Redeploy**.
+Si Vercel signale que les variables existent déjà, mettre un préfixe
+(ex. `TG`) : la fonction essaie toutes les bases déclarées et garde celle
+qui répond. Les tournois restés sur les appareils sont renvoyés tout seuls
+dans la nouvelle base.
+
 ## Déploiement sur Vercel
 
 1. [vercel.com](https://vercel.com) → **Add New… → Project** → importer le dépôt,
