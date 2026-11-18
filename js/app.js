@@ -137,6 +137,7 @@
   function stageLabel(st, m, long) {
     if (m.stage === "p1") {
       if (m.isFinal) return long ? "Finale (match unique)" : "Finale";
+      if (m.barrage) return long ? "Phase 1 · barrage (contre le 1er perdant)" : "Barrage";
       return long ? "Phase 1 · match " + (m.index + 1) : "Phase 1";
     }
     if (m.stage === "main") return long ? Store.roundName(st.main.totalRounds, m.round) : shortRound(st.main.totalRounds, m.round);
@@ -180,7 +181,7 @@
     if (pl.size === 1) parts = ["Finale directe (1 match)"];
     else {
       parts = [
-        "Phase 1 : " + plural(pl.phase1Matches, "match", "matchs") + (pl.exempt ? " + 1 exempt" : ""),
+        "Phase 1 : " + plural(pl.phase1Matches, "match", "matchs") + (pl.exempt ? " + 1 barrage" : ""),
         pl.size === 2 ? "Finale entre les 2 qualifiés" : "Tableau final de " + pl.size + " (" + (pl.repechage ? plural(pl.repechage, "repêché") : "aucun repêché") + ")",
         !consOn ? "Consolante désactivée" : (pl.consolante >= 2 ? "Consolante : " + pl.consolante : "Pas de consolante"),
       ];
@@ -200,6 +201,7 @@
   }
   /** « demi-finale », « match n°4 de la phase 1 », « quart de finale de consolante »… */
   function matchSing(st, m) {
+    if (m.barrage) return "barrage de la phase 1";
     if (m.stage === "p1") return "match n°" + (nz(m.index) + 1) + " de la phase 1";
     if (m.stage === "main") return roundSing(st.main.totalRounds, m.round);
     return roundSing(st.consolante ? st.consolante.totalRounds : m.round, m.round) + " de consolante";
@@ -233,6 +235,7 @@
     if (src.type === "rep") return repSrcText(st, src.k);
     if (src.type === "loser") return consSrcText(st, src.q);
     if (src.type === "exempt") return `<b>${esc(pname(t, src.pid))}</b>`;
+    if (src.type === "loser1") return "le premier joueur à perdre son match de phase 1";
     if (src.type !== "p1" && src.type !== "winner") return "votre adversaire";
     const m = st.byId[src.matchId];
     if (!m) return "votre adversaire";
@@ -906,7 +909,7 @@
       ${sectionTitle("Déroulé")}
       <p class="plan-text" data-plan>${esc(pi.text)}</p>
       ${pi.ok && pi.pl.size > 1 ? `<div class="plan-tiles">
-        <div class="tile"><b>${nz(pi.pl.phase1Matches)}</b><span>match${pi.pl.phase1Matches > 1 ? "s" : ""} de phase 1${pi.pl.exempt ? " + 1 exempt" : ""}</span></div>
+        <div class="tile"><b>${nz(pi.pl.phase1Matches)}</b><span>match${pi.pl.phase1Matches > 1 ? "s" : ""} de phase 1${pi.pl.exempt ? " + 1 barrage" : ""}</span></div>
         <div class="tile"><b>${nz(pi.pl.size)}</b><span>au tableau final</span></div>
         <div class="tile"><b>${nz(pi.pl.repechage)}</b><span>repêché${pi.pl.repechage > 1 ? "s" : ""}</span></div>
         <div class="tile"><b>${pi.consOn && pi.pl.consolante >= 2 ? nz(pi.pl.consolante) : "—"}</b><span>en consolante</span></div>
@@ -915,7 +918,7 @@
         <button type="button" data-p="list" class="${listMode ? "active" : ""}" aria-pressed="${listMode}">Dans l’ordre de la liste</button>
         <button type="button" data-p="random" class="${listMode ? "" : "active"}" aria-pressed="${!listMode}">Au hasard</button>
       </div>
-      <p class="muted small pair-note">${listMode ? "Le 1er joue contre le 2e, le 3e contre le 4e, et ainsi de suite" + (n % 2 ? " · nombre impair : le dernier de la liste est exempt." : ".") : "Paires et places dans le tableau tirées au sort."}</p>
+      <p class="muted small pair-note">${listMode ? "Le 1er joue contre le 2e, le 3e contre le 4e, et ainsi de suite" + (n % 2 ? " · nombre impair : le dernier de la liste joue contre le premier perdant (barrage)." : ".") + " Au tableau final : les vainqueurs dans l’ordre des matchs, puis les repêchés."  : "Paires et places dans le tableau tirées au sort."}</p>
       <button class="btn big block draw-btn" type="button" ${pi.ok ? "" : "disabled"}>${listMode ? "▶ Lancer la phase 1" : "🎲 Tirage au sort"}</button>
     </section>`);
     card.querySelector(".pair-seg").onclick = (e) => {
@@ -932,7 +935,7 @@
     const ps = t.players, out = [];
     for (let i = 0; i + 1 < ps.length && out.length < 4; i += 2) out.push(`<li><b>${esc(ps[i].name)}</b> – <b>${esc(ps[i + 1].name)}</b></li>`);
     if (ps.length > 9) out.push("<li>…</li>");
-    return `<ol class="pair-preview">${out.join("")}</ol>${ps.length % 2 ? `<p class="muted small">Exempt (qualifié d’office) : <b>${esc(ps[ps.length - 1].name)}</b></p>` : ""}`;
+    return `<ol class="pair-preview">${out.join("")}</ol>${ps.length % 2 ? `<p class="muted small">Barrage : <b>${esc(ps[ps.length - 1].name)}</b> contre le premier perdant de la phase 1.</p>` : ""}`;
   }
 
   function openDraw(tid) {
@@ -956,7 +959,7 @@
       const st = Store.state(t2);
       modal({
         title: listMode ? "Phase 1 lancée ✓" : "Tirage effectué ✓", cls: "done-modal",
-        body: [el(`<div class="draw-done"><img src="${LOGO}" alt="" class="crest" /><p><b>${plural(st.phase1.total, "match", "matchs")}</b> ${st.phase1.total > 1 ? "sont prêts" : "est prêt"} à être joué${st.phase1.total > 1 ? "s" : ""}${st.exempt ? ` · <b>${esc(pname(t2, st.exempt))}</b> est exempt (qualifié d’office)` : ""}.</p></div>`)],
+        body: [el(`<div class="draw-done"><img src="${LOGO}" alt="" class="crest" /><p><b>${plural(st.phase1.total, "match", "matchs")}</b> ${st.phase1.total > 1 ? "sont prêts" : "est prêt"} à être joué${st.phase1.total > 1 ? "s" : ""}${st.exempt ? ` · <b>${esc(pname(t2, st.exempt))}</b> est exempt (qualifié d’office)` : ""}${st.barrage ? ` · <b>${esc(pname(t2, st.barrage.p1))}</b> jouera contre le premier perdant (barrage)` : ""}.</p></div>`)],
         actions: [
           { label: "Voir l’arbre", cls: "subtle", onClick: (c) => { c(); navigate("#/t/" + encodeURIComponent(tid) + "/bracket"); } },
           { label: "Saisir les scores", onClick: (c) => { c(); navigate("#/t/" + encodeURIComponent(tid) + "/scores"); } },
@@ -1040,7 +1043,7 @@
     const nScores = countDone(realMatches(st.all));
     const info = el(`<div class="info-banner">
       <span class="ico">🔒</span>
-      <div class="ib-txt"><strong>Tirage effectué — inscriptions closes.</strong><br/><span class="muted">${plural(t.players.length, "joueur")} · ${plural(nScores, "match joué", "matchs joués")} sur ${nz(st.progress.total)}${st.exempt ? " · exempt : " + esc(pname(t, st.exempt)) : ""}</span></div>
+      <div class="ib-txt"><strong>Tirage effectué — inscriptions closes.</strong><br/><span class="muted">${plural(t.players.length, "joueur")} · ${plural(nScores, "match joué", "matchs joués")} sur ${nz(st.progress.total)}${st.exempt ? " · exempt : " + esc(pname(t, st.exempt)) : ""}${st.barrage ? " · barrage : " + esc(pname(t, st.barrage.p1)) + " contre le 1er perdant" : ""}</span></div>
     </div>`);
     if (!nScores) {
       const b = el('<button type="button" class="btn subtle sm">Modifier la liste</button>');
@@ -2076,6 +2079,7 @@
     if (src.type === "rep") return "Repêché n°" + nz(src.k);
     if (src.type === "loser") return "Prochain perdant";
     if (src.type === "exempt") return pname(t, src.pid);
+    if (src.type === "loser1") return "1er perdant";
     if (src.type === "p1" || src.type === "winner") {
       const sm = st.byId[src.matchId];
       // Noms de famille : les deux joueurs restent identifiables sur une carte étroite.

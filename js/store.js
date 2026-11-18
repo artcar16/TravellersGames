@@ -165,6 +165,7 @@
         .map(normPlayer);
       t.scores = cleanScores(t.scores);
       t.draw = cleanDraw(t.draw);
+      upgradeListDraw(t);
       const cl = cleanCleared(t.cleared);
       if (cl) t.cleared = cl; else delete t.cleared;
       return t;
@@ -264,13 +265,40 @@
       return r;
     };
     const reps = slots.filter((s) => s.kind === "rep").length;
-    return {
+    const out = {
       id: d.id, at: Number(d.at) || 0,
       n: Number.isInteger(d.n) ? d.n : p1.length * 2 + (isPid(d.exempt) ? 1 : 0),
       size: P, qualifiers: P - reps, repechage: reps,
       p1, exempt: isPid(d.exempt) ? d.exempt : null, slots,
       tiebreak: nums(d.tiebreak), consOrder: nums(d.consOrder),
     };
+    if (d.list === true) out.list = true;        // paires et tableau dans l'ordre de la liste
+    if (d.barrage === true && out.exempt) out.barrage = true;   // le joueur impair joue le 1er perdant
+    return out;
+  }
+  /** Tableau « ordre de la liste » : vainqueurs des matchs dans l'ordre, puis les repêchés à la fin. */
+  function listSlots(p1, exempt, P) {
+    const slots = p1.map((m) => ({ kind: "match", ref: m.id }));
+    if (exempt) slots.push({ kind: "bye", pid: exempt });
+    for (let k = 1; slots.length < P; k++) slots.push({ kind: "rep", k });
+    return slots;
+  }
+  /**
+   * Tirage fait dans l'ordre de la liste par une version précédente (repêchés
+   * intercalés, joueur impair exempt) : mis à jour à la lecture — même tirage,
+   * mêmes matchs de phase 1 (les scores restent valables).
+   */
+  function upgradeListDraw(t) {
+    const d = t.draw;
+    if (!d || d.list || (t.settings && t.settings.pairing === "random")) return;
+    const ps = t.players || [];
+    const n = d.p1.length;
+    if (n < 1 || ps.length !== 2 * n + (d.exempt ? 1 : 0)) return;
+    for (let i = 0; i < n; i++) if (d.p1[i].a !== ps[2 * i].id || d.p1[i].b !== ps[2 * i + 1].id) return;
+    if (d.exempt && d.exempt !== ps[ps.length - 1].id) return;
+    d.slots = listSlots(d.p1, d.exempt, d.slots.length);
+    d.list = true;
+    if (d.exempt) d.barrage = true;
   }
 
   // ============================================================
@@ -425,12 +453,16 @@
     let slots = seedOrder(P).map((seed) => (seed <= W ? direct[seed - 1] : { kind: "rep", k: seed - W }));
     // Ordre de la liste : les matchs se suivent dans le tableau (vainqueur du 1er
     // match contre celui du 2e…), les places de repêchage restant aux mêmes endroits.
-    if (listOrder) { let i = 0; slots = slots.map((sl) => (sl.kind === "rep" ? sl : direct[i++])); }
+    if (listOrder) slots = listSlots(p1, exempt, P);
 
     const tiebreak = {}, consOrder = {};
     ids.forEach((id) => { tiebreak[id] = rand(); consOrder[id] = rand(); });
 
     t.draw = { id: uid("drw"), at: Date.now(), n: ids.length, size: P, qualifiers: W, repechage: P - W, p1, exempt, slots, tiebreak, consOrder };
+    if (listOrder) t.draw.list = true;
+    // Nombre impair : personne n'entre au tableau sans jouer — le joueur restant
+    // affronte le premier perdant de la phase 1 (barrage).
+    if (exempt && listOrder) t.draw.barrage = true;
     t.scores = {};
     delete t.cleared;
     touch(t);
@@ -545,9 +577,32 @@
       settle(m);
       return m;
     });
+    const cleared = t.cleared && typeof t.cleared === "object" ? t.cleared : {};
+    const eventOf = (m) => {
+      if (m.status === "done") return { m, f: m.f, held: false };
+      const c = cleared[m.id];
+      return c && c.d === d.id && Number.isFinite(c.f) && c.f > 0 ? { m, f: c.f, held: true } : null;
+    };
+    const byArrival = (x, y) => (x.f - y.f) || (x.m.index - y.m.index);
+    // Barrage (nombre impair) : le joueur restant affronte le PREMIER perdant de
+    // la phase 1 ; le vainqueur prend sa place au tableau, le perdant rejoint la
+    // file des perdants (le 1er perdant, battu deux fois, part en consolante).
+    let bm = null, first = null;
+    if (d.barrage && d.exempt) {
+      first = p1.map(eventOf).filter(Boolean).sort(byArrival)[0] || null;
+      bm = mk("p1", 1, p1.length, "p1-" + p1.length, s.pointsPhase1);
+      bm.barrage = true;
+      bm.p1 = d.exempt; bm.src1 = { type: "player" };
+      bm.p2 = first && !first.held ? first.m.loser : null; bm.src2 = { type: "loser1" };
+      settle(bm);
+      p1.push(bm);
+    }
     const p1Done = p1.every((m) => m.status === "done");
     st.phase1 = { matches: p1, done: p1Done, played: p1.filter((m) => m.status === "done").length, total: p1.length };
-    st.exempt = d.exempt || null;
+    st.exempt = bm ? null : (d.exempt || null);
+    st.barrage = bm;
+    // Places du tableau : celle de l'exempt revient au vainqueur du barrage.
+    const slots = bm ? d.slots.map((sl) => (sl.kind === "bye" ? { kind: "match", ref: bm.id } : sl)) : d.slots;
 
     // ----- Repêchage AU FIL DE L'EAU -----
     // Les perdants de phase 1 sont pris dans l'ordre où leur match s'est
@@ -561,28 +616,21 @@
     // arrivées précédentes : une place attribuée ne bouge plus.
     // Un score de phase 1 EFFACÉ garde son rang d'arrivée et sa place
     // (t.cleared) : rien ne se décale, et le ressaisir remet tout en place.
-    const R = d.slots.filter((x) => x.kind === "rep").length;
-    const P = d.slots.length;
+    const R = slots.filter((x) => x.kind === "rep").length;
+    const P = slots.length;
     const K = log2(P);
     st.main.size = P; st.main.totalRounds = K;
     const p1ById = {}; p1.forEach((m) => { p1ById[m.id] = m; });
     const repSlots = [];
-    d.slots.forEach((sl, j) => { if (sl.kind === "rep") repSlots.push({ j, k: sl.k }); });
+    slots.forEach((sl, j) => { if (sl.kind === "rep") repSlots.push({ j, k: sl.k }); });
     repSlots.sort((a, b) => a.k - b.k);
-    const facesOwnMatch = (r, m) => { const o = d.slots[r.j ^ 1]; return !!o && o.kind === "match" && o.ref === m.id; };
-    const cleared = t.cleared && typeof t.cleared === "object" ? t.cleared : {};
-    const events = [];
-    p1.forEach((m) => {
-      if (m.status === "done") { events.push({ m, f: m.f, held: false }); return; }
-      const c = cleared[m.id];
-      if (c && c.d === d.id && Number.isFinite(c.f) && c.f > 0) events.push({ m, f: c.f, held: true });
-    });
-    events.sort((x, y) => (x.f - y.f) || (x.m.index - y.m.index));
+    const facesOwnMatch = (r, m) => { const o = slots[r.j ^ 1]; return !!o && o.kind === "match" && o.ref === m.id; };
+    const events = p1.map(eventOf).filter(Boolean).sort(byArrival);
     const evPos = {};
     events.forEach((e, i) => { evPos[e.m.id] = i; });
     /** Depuis quand l'adversaire d'une place attend-il (exempt : depuis le début) ? */
     const waitSince = (r, i) => {
-      const o = d.slots[r.j ^ 1];
+      const o = slots[r.j ^ 1];
       if (!o) return Infinity;
       if (o.kind === "bye") return -1;
       if (o.kind === "match" && evPos[o.ref] != null && evPos[o.ref] < i) return events[evPos[o.ref]].f;
@@ -599,6 +647,10 @@
         const lostAs1 = m.loser === m.p1;
         x.pf = lostAs1 ? m.score1 : m.score2; x.pa = lostAs1 ? m.score2 : m.score1; x.diff = x.pf - x.pa;
       }
+      // 1er perdant : il joue le barrage (ni repêché, ni consolante pour l'instant).
+      if (first && e.m === first.m) { x.barrage = true; return x; }
+      // Perdant du barrage battu pour la 2e fois : directement en consolante.
+      if (bm && m === bm && !e.held && first && pid === first.m.loser) { x.twice = true; consQueue.push(pid); return x; }
       if (taken < R) {
         let best = null, bestW = Infinity;
         repSlots.forEach((r) => {
@@ -626,7 +678,7 @@
     st.repechage = { needed: R, resolved: picks.length >= R, ranking, picks, assign: repAssign, reserved, waiting };
 
     // ----- Tableau final -----
-    st.leaves = d.slots.map((sl, i) => {
+    st.leaves = slots.map((sl, i) => {
       if (sl.kind === "match") return { kind: "match", slot: i, match: p1ById[sl.ref] };
       if (sl.kind === "bye") return { kind: "exempt", slot: i, pid: sl.pid };
       return { kind: "rep", slot: i, k: sl.k, pid: repAssign[sl.k] || null };
@@ -637,7 +689,7 @@
       for (let i = 0; i < P / 2; i++) {
         const m = mk("main", 1, i, "m1-" + i, mainPointsFor(s, K, 1));
         [1, 2].forEach((slotNo) => {
-          const sl = d.slots[2 * i + slotNo - 1];
+          const sl = slots[2 * i + slotNo - 1];
           if (sl.kind === "match") {
             const pm = p1ById[sl.ref];
             m["src" + slotNo] = { type: "p1", matchId: sl.ref };
@@ -684,7 +736,7 @@
     // d'arrivée : les deux premiers jouent ensemble aussitôt, puis les deux
     // suivants… ; les derniers arrivés reçoivent les exempts (directement au
     // 2e tour, où un vainqueur les attend déjà).
-    const Cn = p1.length - R;
+    const Cn = p1.length - (bm ? 1 : 0) - R;   // le barrage remplace un perdant par un autre
     if (s.consolante && Cn >= 2) {
       const Pc = nextPow2(Cn), Kc = log2(Pc);
       const posOf = {};
