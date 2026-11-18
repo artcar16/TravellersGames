@@ -901,6 +901,7 @@
   function planCard(t) {
     const n = t.players.length;
     const pi = planInfo(t, n);
+    const listMode = t.settings.pairing !== "random";
     const card = el(`<section class="card plan-card ${pi.ok ? "" : "is-empty"}">
       ${sectionTitle("Déroulé")}
       <p class="plan-text" data-plan>${esc(pi.text)}</p>
@@ -910,10 +911,28 @@
         <div class="tile"><b>${nz(pi.pl.repechage)}</b><span>repêché${pi.pl.repechage > 1 ? "s" : ""}</span></div>
         <div class="tile"><b>${pi.consOn && pi.pl.consolante >= 2 ? nz(pi.pl.consolante) : "—"}</b><span>en consolante</span></div>
       </div>` : ""}
-      <button class="btn big block draw-btn" type="button" ${pi.ok ? "" : "disabled"}>🎲 Tirage au sort</button>
+      <div class="seg pair-seg" role="group" aria-label="Paires de la phase 1">
+        <button type="button" data-p="list" class="${listMode ? "active" : ""}" aria-pressed="${listMode}">Dans l’ordre de la liste</button>
+        <button type="button" data-p="random" class="${listMode ? "" : "active"}" aria-pressed="${!listMode}">Au hasard</button>
+      </div>
+      <p class="muted small pair-note">${listMode ? "Le 1er joue contre le 2e, le 3e contre le 4e, et ainsi de suite" + (n % 2 ? " · nombre impair : le dernier de la liste est exempt." : ".") : "Paires et places dans le tableau tirées au sort."}</p>
+      <button class="btn big block draw-btn" type="button" ${pi.ok ? "" : "disabled"}>${listMode ? "▶ Lancer la phase 1" : "🎲 Tirage au sort"}</button>
     </section>`);
+    card.querySelector(".pair-seg").onclick = (e) => {
+      const b = e.target.closest("button");
+      if (!b || b.classList.contains("active")) return;
+      Store.updateTournament(t.id, { settings: { pairing: b.dataset.p } });
+      refresh();
+    };
     card.querySelector(".draw-btn").onclick = () => openDraw(t.id);
     return card;
+  }
+  /** Aperçu des premières paires dans l'ordre de la liste (HTML, noms échappés). */
+  function listPairsHtml(t) {
+    const ps = t.players, out = [];
+    for (let i = 0; i + 1 < ps.length && out.length < 4; i += 2) out.push(`<li><b>${esc(ps[i].name)}</b> – <b>${esc(ps[i + 1].name)}</b></li>`);
+    if (ps.length > 9) out.push("<li>…</li>");
+    return `<ol class="pair-preview">${out.join("")}</ol>${ps.length % 2 ? `<p class="muted small">Exempt (qualifié d’office) : <b>${esc(ps[ps.length - 1].name)}</b></p>` : ""}`;
   }
 
   function openDraw(tid) {
@@ -921,10 +940,13 @@
     if (!t) return;
     const pi = planInfo(t, t.players.length);
     if (!pi.ok) { toast(pi.text, "err"); return; }
+    const listMode = t.settings.pairing !== "random";
     ask({
-      title: "Tirage au sort",
-      html: `<p class="plan-text">${esc(pi.text)}</p><p class="muted">Les paires de la phase 1 et la place de chacun dans le tableau sont tirées au hasard. Après le tirage, la liste des joueurs est figée (on peut annuler le tirage dans Réglages).</p>`,
-      ok: "Lancer le tirage",
+      title: listMode ? "Lancer la phase 1" : "Tirage au sort",
+      html: listMode
+        ? `<p class="plan-text">${esc(pi.text)}</p><p>Paires dans l’ordre de la liste :</p>${listPairsHtml(t)}<p class="muted">Ensuite, la liste des joueurs est figée (on peut annuler dans Réglages).</p>`
+        : `<p class="plan-text">${esc(pi.text)}</p><p class="muted">Les paires de la phase 1 et la place de chacun dans le tableau sont tirées au hasard. Après le tirage, la liste des joueurs est figée (on peut annuler le tirage dans Réglages).</p>`,
+      ok: listMode ? "Lancer la phase 1" : "Lancer le tirage",
     }).then((ok) => {
       if (!ok) return;
       const r = Store.drawTournament(tid);
@@ -933,7 +955,7 @@
       const t2 = Store.getTournament(tid);
       const st = Store.state(t2);
       modal({
-        title: "Tirage effectué ✓", cls: "done-modal",
+        title: listMode ? "Phase 1 lancée ✓" : "Tirage effectué ✓", cls: "done-modal",
         body: [el(`<div class="draw-done"><img src="${LOGO}" alt="" class="crest" /><p><b>${plural(st.phase1.total, "match", "matchs")}</b> ${st.phase1.total > 1 ? "sont prêts" : "est prêt"} à être joué${st.phase1.total > 1 ? "s" : ""}${st.exempt ? ` · <b>${esc(pname(t2, st.exempt))}</b> est exempt (qualifié d’office)` : ""}.</p></div>`)],
         actions: [
           { label: "Voir l’arbre", cls: "subtle", onClick: (c) => { c(); navigate("#/t/" + encodeURIComponent(tid) + "/bracket"); } },
@@ -968,7 +990,7 @@
           const r = Store.removePlayer(t.id, p.id);
           if (r.error) { toast(r.error, "err"); return; }
           redraw();
-          toast(keep.name + " retiré", "", { label: "Annuler", fn: () => { Store.addPlayer(t.id, keep.name, { club: keep.club, rating: keep.rating, note: keep.note }); redraw(); } });
+          toast(keep.name + " retiré", "", { label: "Annuler", fn: () => { Store.addPlayer(t.id, keep.name, { club: keep.club, rating: keep.rating, note: keep.note, index: i }); redraw(); } });
         };
         ol.appendChild(li);
       });
@@ -1034,26 +1056,39 @@
 
     const search = el(`<div class="search-bar"><input type="search" placeholder="Filtrer les joueurs…" value="${esc(ui.plq)}" aria-label="Filtrer les joueurs" /></div>`);
     $app.appendChild(search);
+    // Ordre : celui de la liste saisie (par défaut) ou le classement (victoires, points…).
+    const byRank = pref("plSort", "list") === "rank";
+    const sortBar = el(`<div class="seg" role="group" aria-label="Ordre des joueurs">
+      <button type="button" data-s="list" class="${byRank ? "" : "active"}" aria-pressed="${!byRank}">Ordre de la liste</button>
+      <button type="button" data-s="rank" class="${byRank ? "active" : ""}" aria-pressed="${byRank}">Classement</button></div>`);
+    sortBar.onclick = (e) => {
+      const b = e.target.closest("button");
+      if (!b || b.classList.contains("active")) return;
+      setPref("plSort", b.dataset.s);
+      refresh();
+    };
+    $app.appendChild(sortBar);
     const tableCard = el('<section class="card flush"></section>');
     $app.appendChild(tableCard);
 
-    const rows = t.players.map((p) => {
+    const rows = t.players.map((p, i) => {
       const s = Store.playerStats(t, p.id);
-      return { p, s, status: Store.playerStatus(t, p.id) };
-    }).sort((a, b) => (b.s.wins - a.s.wins) || (b.s.pointsFor - a.s.pointsFor) || ((b.s.pointsFor - b.s.pointsAgainst) - (a.s.pointsFor - a.s.pointsAgainst)) || a.p.name.localeCompare(b.p.name, "fr"));
+      return { p, s, n: i + 1, status: Store.playerStatus(t, p.id) };
+    });
+    if (byRank) rows.sort((a, b) => (b.s.wins - a.s.wins) || (b.s.pointsFor - a.s.pointsFor) || ((b.s.pointsFor - b.s.pointsAgainst) - (a.s.pointsFor - a.s.pointsAgainst)) || (a.n - b.n));
 
     const counts = {};
     t.players.forEach((p) => { const k = norm(p.name); counts[k] = (counts[k] || 0) + 1; });
     function draw() {
       const q = norm(ui.plq);
       const list = rows.filter((r) => !q || norm(r.p.name).includes(q));
-      tableCard.innerHTML = `<table class="table rank-table"><thead><tr><th class="rank">#</th><th>Joueur</th><th class="num">J</th><th class="num">V</th><th class="num">Pts</th><th class="num hide-mobile">Diff.</th></tr></thead><tbody></tbody></table>`;
+      tableCard.innerHTML = `<table class="table rank-table"><thead><tr><th class="rank" title="${byRank ? "Classement" : "Numéro dans la liste"}">#</th><th>Joueur</th><th class="num">J</th><th class="num">V</th><th class="num">Pts</th><th class="num hide-mobile">Diff.</th></tr></thead><tbody></tbody></table>`;
       const tb = tableCard.querySelector("tbody");
       list.forEach((r) => {
         const c = chipFor(st, r.p.id, r.status);
         const diff = r.s.pointsFor - r.s.pointsAgainst;
         const tr = el(`<tr class="clickable">
-          <td class="rank">${nz(rows.indexOf(r) + 1)}</td>
+          <td class="rank">${nz(byRank ? rows.indexOf(r) + 1 : r.n)}</td>
           <td><div class="pl-cell"><strong>${esc(r.p.name)}</strong>${pillHtml(c[0], c[1])}${counts[norm(r.p.name)] > 1 ? pillHtml("warn sm", "doublon") : ""}</div></td>
           <td class="num">${nz(r.s.played)}</td><td class="num">${nz(r.s.wins)}</td><td class="num">${nz(r.s.pointsFor)}</td>
           <td class="num hide-mobile">${signed(diff)}</td></tr>`);
@@ -1708,7 +1743,7 @@
       const row = el('<div class="btn-row"></div>');
       const redo = el('<button class="btn subtle" type="button">🎲 Refaire le tirage</button>');
       const undo = el('<button class="btn danger" type="button">Annuler le tirage</button>');
-      redo.onclick = () => ask({ title: "Refaire le tirage ?", html: `<p>Un nouveau tirage au sort recompose toutes les paires.${n ? ` <b>Les ${plural(n, "score saisi", "scores saisis")} seront effacés.</b>` : ""}</p>`, ok: "Refaire le tirage", cancel: "Garder ce tirage", danger: n > 0 }).then((ok) => {
+      redo.onclick = () => ask({ title: "Refaire le tirage ?", html: `<p>${t.settings.pairing === "random" ? "Un nouveau tirage au sort recompose toutes les paires." : "Les paires sont refaites dans l’ordre de la liste (1 contre 2, 3 contre 4…)."}${n ? ` <b>Les ${plural(n, "score saisi", "scores saisis")} seront effacés.</b>` : ""}</p>`, ok: "Refaire le tirage", cancel: "Garder ce tirage", danger: n > 0 }).then((ok) => {
         if (!ok) return;
         const r = Store.drawTournament(tid);
         if (r.error) toast(r.error, "err"); else { refresh(); toast("Nouveau tirage effectué."); }

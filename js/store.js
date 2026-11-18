@@ -127,6 +127,7 @@
       consolante: true,
       autoRotate: true,
       rotateSeconds: 20,
+      pairing: "list",                  // phase 1 : "list" = 1 contre 2, 3 contre 4… ; "random" = tirage au sort
       rules: "Phase 1 : tout le monde joue. Les gagnants se qualifient pour le tableau final ; les places restantes vont aussitôt aux premiers perdants (dans l'ordre de fin des matchs), qui rejouent tout de suite. Les autres perdants jouent la consolante, elle aussi au fil de l'eau. Le premier joueur atteignant le nombre de points du match l'emporte.",
     };
   }
@@ -143,6 +144,7 @@
     o.mainPoints = d.mainPoints.map((v, i) => posInt(mp[i], v));
     o.consolante = o.consolante !== false;
     o.autoRotate = o.autoRotate !== false;
+    o.pairing = o.pairing === "random" ? "random" : "list";
     if (typeof o.rules !== "string" || o.rules === OLD_RULES) o.rules = d.rules;
     return o;
   }
@@ -328,7 +330,9 @@
     name = cleanName(name, "");
     if (!name) return { error: "Le nom est requis." };
     const p = normPlayer(Object.assign({}, extra || {}, { id: uid("ply"), name }));
-    t.players.push(p);
+    // extra.index : remettre un joueur à sa place dans la liste (« Annuler » un retrait).
+    const at = extra && Number.isInteger(extra.index) ? Math.max(0, Math.min(extra.index, t.players.length)) : t.players.length;
+    t.players.splice(at, 0, p);
     touch(t); commit("ajout joueur");
     return { ok: true, player: p };
   }
@@ -404,18 +408,24 @@
     const pl = plan(ids.length);
     if (!pl.ok) return { error: pl.error };
 
-    const order = shuffle(ids);
+    // Paires dans l'ordre de la liste (1 contre 2, 3 contre 4… ; impair : le dernier est
+    // exempt), ou tirées au sort.
+    const listOrder = normSettings(t.settings).pairing !== "random";
+    const order = listOrder ? ids.slice() : shuffle(ids);
     const p1 = [];
     for (let i = 0; i + 1 < order.length; i += 2) p1.push({ id: "p1-" + p1.length, a: order[i], b: order[i + 1] });
     const exempt = order.length % 2 ? order[order.length - 1] : null;
 
     let direct = p1.map((m) => ({ kind: "match", ref: m.id }));
     if (exempt) direct.push({ kind: "bye", pid: exempt });
-    direct = shuffle(direct);
+    if (!listOrder) direct = shuffle(direct);
     const W = direct.length, P = nextPow2(W);
     // Places de repêchage = têtes de série W+1..P : elles affrontent toujours
     // un qualifié direct, et sont réparties uniformément dans le tableau.
-    const slots = seedOrder(P).map((seed) => (seed <= W ? direct[seed - 1] : { kind: "rep", k: seed - W }));
+    let slots = seedOrder(P).map((seed) => (seed <= W ? direct[seed - 1] : { kind: "rep", k: seed - W }));
+    // Ordre de la liste : les matchs se suivent dans le tableau (vainqueur du 1er
+    // match contre celui du 2e…), les places de repêchage restant aux mêmes endroits.
+    if (listOrder) { let i = 0; slots = slots.map((sl) => (sl.kind === "rep" ? sl : direct[i++])); }
 
     const tiebreak = {}, consOrder = {};
     ids.forEach((id) => { tiebreak[id] = rand(); consOrder[id] = rand(); });
