@@ -16,13 +16,12 @@ Le nombre de joueurs est **libre** (32, 48, 49, 64…).
 1. **Phase 1** — tout le monde joue un match (paires tirées au sort). Avec un nombre
    impair de joueurs, un joueur est exempt et qualifié d'office.
 2. **Tableau final** — élimination directe. Sa taille est la **puissance de 2** juste
-   au-dessus du nombre de qualifiés ; les places manquantes vont **aussitôt aux premiers
-   perdants** de la phase 1 (*repêchage*), dans l'ordre où leur match s'est terminé
-   (heure de la première saisie du score : une correction ne fait pas perdre sa place).
-   Un repêché n'est jamais placé face à celui qui vient de le battre (la place revient
-   alors au perdant suivant).
-   Un match se joue **dès que ses deux adversaires sont connus** — personne n'attend
-   la fin de la phase 1.
+   au-dessus du nombre de qualifiés ; les places manquantes vont aux perdants de la phase 1
+   avec le **plus petit écart de score** (à égalité : le plus de points marqués, puis
+   tirage au sort). Chacun est fixé **dès que c'est certain** (repêché, ou envoyé en
+   consolante), au plus tard à la fin de la phase 1. En mode « ordre de la liste » :
+   1 contre 2, 3 contre 4… ; nombre impair : le dernier joue contre le premier perdant
+   (barrage) ; au tableau, les vainqueurs dans l'ordre des matchs puis les repêchés.
 3. **Consolante** — les perdants non repêchés, en élimination directe, remplie **au fil
    de l'eau** : les deux premiers arrivés jouent ensemble aussitôt, puis les deux
    suivants… ; les derniers arrivés reçoivent les exempts (directement au 2e tour, où

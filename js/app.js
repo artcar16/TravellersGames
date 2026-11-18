@@ -222,7 +222,7 @@
   function repSrcText(st, k) {
     const n = repQueuePos(st, k);
     if (st.repechage.reserved && st.repechage.reserved[k]) return "le repêché de ce match (score effacé, à ressaisir)";
-    return n ? nextNth(n) + " perdant de la phase 1 (repêché)" : "un repêché (un prochain perdant de la phase 1)";
+    return n ? nextNth(n) + " perdant de la phase 1 (repêché)" : "un repêché (perdant avec un des plus petits écarts de la phase 1)";
   }
   function consSrcText(st, q) {
     const n = consQueuePos(st, q);
@@ -311,10 +311,18 @@
         if (w.type === "rep") {
           const n = repQueuePos(st, w.k);
           return { cls: "wait", icon: "⏳", title: `${pre}Attendez votre repêché`,
-            sub: `${n ? (n === 1 ? "Ce sera le prochain joueur à perdre son match de phase 1" : "Vous êtes " + ordinal(n) + " dans la file : ce sera " + nextNth(n) + " perdant de la phase 1") : "Un des prochains perdants de la phase 1"} · ${where}` };
+            sub: `${n ? (n === 1 ? "Ce sera le prochain joueur à perdre son match de phase 1" : "Vous êtes " + ordinal(n) + " dans la file : ce sera " + nextNth(n) + " perdant de la phase 1") : "Un perdant avec un des plus petits écarts de la phase 1, désigné dès que c’est sûr"} · ${where}` };
         }
         const detail = waitDetailHtml(t, st, w);
         return { cls: "wait", icon: "⏳", title: `${pre}Attendez ${srcHtml(t, st, w)}`, sub: `Prochain match : ${where}${detail ? " · " + detail : ""}` };
+      }
+      case "repechable": {
+        const rk = s.rank ? ordinal(s.rank) + " des perdants" : "Perdant";
+        return {
+          cls: s.inZone ? "rep in" : "rep", icon: s.inZone ? "★" : "☆",
+          title: `Repêchage en attente — ${rk} (écart ${nz(s.gap)})`,
+          sub: `${s.inZone ? "Dans les " + nz(s.needed) + " repêchés pour l’instant" : "Hors des " + nz(s.needed) + " repêchés pour l’instant"} · décision dès que c’est sûr (au plus tard à la fin de la phase 1)${t.settings.consolante !== false ? ", sinon consolante" : ""}.`,
+        };
       }
       case "champion":
         return { cls: "champ", icon: "🏆", title: "Champion !", sub: "Vainqueur du tableau final — félicitations !" };
@@ -341,6 +349,7 @@
       case "wait":
         if (s.match.stage === "cons") return ["cons", "Consolante · en attente"];
         return ["qual", (picked ? "Repêché" : "Qualifié") + " · en attente"];
+      case "repechable": return [s.inZone ? "rep in" : "rep", (s.rank ? ordinal(s.rank) : "") + " · écart " + nz(s.gap)];
       case "champion": return ["champ", "🏆 Champion"];
       case "consoleChampion": return ["champ", "🏆 Consolante"];
       case "notDrawn": return ["neutral", "Inscrit"];
@@ -1269,28 +1278,24 @@
     if (!R || st.main.size <= 1) return null;
     const rk = st.repechage.ranking;
     const full = st.repechage.resolved;
-    const consSet = {};
-    if (st.consolante) st.consolante.entrants.forEach((p) => { consSet[p] = true; });
     const free = R - st.repechage.picks.length;
     const card = el(`<section class="card rep-card">
-      ${sectionTitle("Repêchage", full ? pillHtml("ok", "Complet") : pillHtml("warn", plural(free, "place libre", "places libres")))}
-      <p class="muted small">${plural(R, "place")} au tableau final pour les <b>${R > 1 ? R + " premiers" : "premier"}</b> à perdre leur match de phase 1 (jamais face à celui qui vient de les battre) : ${R > 1 ? "ils rejouent" : "il rejoue"} tout de suite. Les perdants suivants partent aussitôt en consolante.</p>
-      <div class="table-wrap"><table class="table rep-table"><colgroup><col class="c-rank"/><col/><col class="c-time"/></colgroup><thead><tr><th class="rank" title="Ordre d’arrivée">#</th><th>Perdant</th><th class="num">Fin</th></tr></thead><tbody></tbody></table></div>
+      ${sectionTitle("Repêchage", full ? pillHtml("ok", "Complet") : pillHtml("warn", plural(free, "place à attribuer", "places à attribuer")))}
+      <p class="muted small">${plural(R, "place")} au tableau final pour les perdants de la phase 1 avec le <b>plus petit écart</b> de score (à égalité : le plus de points marqués). Chacun est fixé dès que c’est certain : repêché, ou envoyé en consolante.</p>
+      <div class="table-wrap"><table class="table rep-table"><colgroup><col class="c-rank"/><col/><col class="c-num"/><col class="c-num"/></colgroup><thead><tr><th class="rank">#</th><th>Perdant</th><th class="num">Score</th><th class="num">Écart</th></tr></thead><tbody></tbody></table></div>
     </section>`);
     const tb = card.querySelector("tbody");
-    if (!rk.length) tb.appendChild(el('<tr><td colspan="3" class="muted center">Aucun perdant pour l’instant.</td></tr>'));
-    rk.forEach((x) => {
-      if (x.held) {
-        const hm = st.byId[x.matchId];
-        tb.appendChild(el(`<tr class="outz"><td class="rank">${nz(x.rank)}</td><td class="rep-name"><span class="rn">${esc(pname(t, hm && hm.p1))} – ${esc(pname(t, hm && hm.p2))}</span>${pillHtml("warn sm", "Score effacé · place gardée")}</td><td class="num time">${x.at ? esc(fmtTime(x.at)) : ""}</td></tr>`));
-        return;
-      }
-      const tag = x.picked ? pillHtml("gold sm", "Repêché") : consSet[x.pid] ? pillHtml("cons sm", "Consolante") : pillHtml("out sm", "Éliminé");
-      const why = x.skipped ? `<div class="rep-why muted">aurait rejoué contre son vainqueur : place au suivant</div>` : "";
-      tb.appendChild(el(`<tr class="${x.picked ? "in" : "outz"}">
-        <td class="rank">${nz(x.rank)}</td><td class="rep-name"><span class="rn">${esc(pname(t, x.pid))}</span>${tag}${why}</td><td class="num time">${x.at ? esc(fmtTime(x.at)) : ""}</td></tr>`));
+    if (!rk.length) tb.appendChild(el('<tr><td colspan="4" class="muted center">Aucun perdant pour l’instant.</td></tr>'));
+    rk.forEach((x, i) => {
+      const tag = x.barrage ? pillHtml("warn sm", "Barrage")
+        : x.twice ? pillHtml("cons sm", "Consolante (2 défaites)")
+        : x.picked ? pillHtml("gold sm", "Repêché")
+        : x.out ? pillHtml("cons sm", "Consolante")
+        : x.inZone ? '<span class="star" title="Dans la zone pour l’instant">★</span>' : "";
+      tb.appendChild(el(`<tr class="${x.picked || (x.inZone && !x.out) ? "in" : "outz"}">
+        <td class="rank">${x.rank ? nz(x.rank) : "–"}</td><td class="rep-name"><span class="rn">${esc(pname(t, x.pid))}</span>${tag}</td><td class="num">${nz(x.pf)}–${nz(x.pa)}</td><td class="num"><b>${nz(x.gap)}</b></td></tr>`));
+      if (x.rank === R && i < rk.length - 1 && rk[i + 1].rank) tb.appendChild(el(`<tr class="cut"><td colspan="4"><span>Ligne de repêchage · ${plural(R, "place")}</span></td></tr>`));
     });
-    if (free > 0) tb.appendChild(el(`<tr class="cut open"><td colspan="3"><span>${plural(free, "place encore libre", "places encore libres")} : ${free > 1 ? "les prochains perdants" : "le prochain perdant"}</span></td></tr>`));
     return card;
   }
 
@@ -2124,7 +2129,7 @@
       }
       const held = st.repechage.reserved && st.repechage.reserved[node.k];
       const qn = repQueuePos(st, node.k);
-      const note = held ? "score à ressaisir" : qn ? (qn === 1 ? "prochain perdant" : ordinal(qn) + " prochain perdant") : "à venir";
+      const note = held ? "score à ressaisir" : qn ? (qn === 1 ? "prochain perdant" : ordinal(qn) + " prochain perdant") : "plus petit écart";
       if (compact) return { cls: "leaf rep c1", html: `<div class="r one tbd"><span class="n">Repêché n°${k}</span><span class="note">${esc(note)}</span></div>` };
       return { cls: "leaf rep", html: trow("tbd", "Repêché n°" + k, "") + trow("note", note.charAt(0).toUpperCase() + note.slice(1), "") };
     }
