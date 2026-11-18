@@ -1279,9 +1279,11 @@
     const rk = st.repechage.ranking;
     const full = st.repechage.resolved;
     const free = R - st.repechage.picks.length;
+    const pendingP1 = st.phase1.matches.filter((m) => m.status !== "done");
     const card = el(`<section class="card rep-card">
       ${sectionTitle("Repêchage", full ? pillHtml("ok", "Complet") : pillHtml("warn", plural(free, "place à attribuer", "places à attribuer")))}
       <p class="muted small">${plural(R, "place")} au tableau final pour les perdants de la phase 1 avec le <b>plus petit écart</b> de score (à égalité : le plus de points marqués). Chacun est fixé dès que c’est certain : repêché, ou envoyé en consolante.</p>
+      ${!full && pendingP1.length ? `<p class="small"><b>${plural(free, "place attend", "places attendent")}</b> ${pendingP1.length > 1 ? "les matchs" : "le match"} : ${pendingP1.map((m) => `<b>${esc(pname(t, m.p1))}</b> – <b>${esc(m.p2 ? pname(t, m.p2) : "1er perdant")}</b>`).join(", ")}.</p>` : ""}
       <div class="table-wrap"><table class="table rep-table"><colgroup><col class="c-rank"/><col/><col class="c-num"/><col class="c-num"/></colgroup><thead><tr><th class="rank">#</th><th>Perdant</th><th class="num">Score</th><th class="num">Écart</th></tr></thead><tbody></tbody></table></div>
     </section>`);
     const tb = card.querySelector("tbody");
@@ -2123,11 +2125,18 @@
       if (node.pid) {
         const r = st.repechage.ranking.find((x) => x.pid === node.pid);
         const nm = pname(t, node.pid);
-        const pts = r ? " · " + ordinal(r.rank) + " perdant" : "";
+        const pts = r && r.gap != null ? " · écart " + nz(r.gap) : "";
         if (compact) return { cls: "leaf rep known c1", html: `<div class="r one in" title="${esc(nm)} · repêché n°${k}${esc(pts)}"><span class="n">${fit(node.pid, D.CW0 - 104)}</span><span class="note">repêché${esc(pts)}</span></div>` };
         return { cls: "leaf rep known", html: trow("in", fit(node.pid, nameW), "", nm) + trow("note", "Repêché n°" + k + esc(pts), "") };
       }
       const held = st.repechage.reserved && st.repechage.reserved[node.k];
+      const pv = st.repechage.provisional && st.repechage.provisional[node.k];
+      if (pv) {
+        // Place pas encore certaine : candidat provisoire (dans la zone pour l'instant).
+        const nm = pname(t, pv.pid), why = "provisoire · écart " + nz(pv.gap);
+        if (compact) return { cls: "leaf rep c1", html: `<div class="r one tbd" title="${esc(nm)} · ${esc(why)}"><span class="n">${fit(pv.pid, D.CW0 - 104, 500)}</span><span class="note">provisoire</span></div>` };
+        return { cls: "leaf rep", html: trow("tbd", fit(pv.pid, nameW, 500), "", nm) + trow("note", "Repêché n°" + k + " · " + why, "") };
+      }
       const qn = repQueuePos(st, node.k);
       const note = held ? "score à ressaisir" : qn ? (qn === 1 ? "prochain perdant" : ordinal(qn) + " prochain perdant") : "plus petit écart";
       if (compact) return { cls: "leaf rep c1", html: `<div class="r one tbd"><span class="n">Repêché n°${k}</span><span class="note">${esc(note)}</span></div>` };

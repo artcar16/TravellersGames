@@ -664,7 +664,11 @@
     })).concat(extra.map((x) => Object.assign(x, { rank: null, picked: false, out: !!x.twice, inZone: false, held: false, skipped: false })));
     const undecided = {};
     known.forEach((x) => { if (!decided[x.pid]) undecided[x.pid] = true; });
-    st.repechage = { needed: R, resolved: picks.length >= R, ranking, picks, assign: repAssign, reserved, waiting: [], undecided, byGap: true };
+    // Places encore libres : candidats provisoires (dans la zone, pas encore certains), dans l'ordre.
+    const provisional = {};
+    const zone = ranking.filter((x) => x.rank && x.inZone && undecided[x.pid]);
+    repSlots.filter((r) => !repAssign[r.k]).forEach((r, i) => { if (zone[i]) provisional[r.k] = zone[i]; });
+    st.repechage = { needed: R, resolved: picks.length >= R, ranking: ranking.filter((x) => !(x.barrage && extra.some((y) => y.twice))), picks, assign: repAssign, reserved, waiting: [], undecided, provisional, byGap: true };
 
     // ----- Tableau final -----
     st.leaves = slots.map((sl, i) => {
