@@ -167,6 +167,7 @@
       t.scores = cleanScores(t.scores);
       t.draw = cleanDraw(t.draw);
       upgradeListDraw(t);
+      if (!(t.seats && typeof t.seats === "object" && typeof t.seats.d === "string" && Array.isArray(t.seats.p) && t.seats.p.length <= 4096)) delete t.seats;
       const cl = cleanCleared(t.cleared);
       if (cl) t.cleared = cl; else delete t.cleared;
       return t;
@@ -466,6 +467,7 @@
     if (exempt && listOrder) t.draw.barrage = true;
     t.scores = {};
     delete t.cleared;
+    delete t.seats;
     touch(t);
     commit("tirage");
     // Nettoyage serveur des scores d'un AUTRE tirage (jamais ceux de celui-ci).
@@ -480,6 +482,7 @@
     t.draw = null;
     t.scores = {};
     delete t.cleared;
+    delete t.seats;
     touch(t);
     commit("annulation tirage");
     if (cloudOn() && TG.Cloud.pushResetScores) TG.Cloud.pushResetScores(t.id, null);
@@ -603,7 +606,10 @@
     st.exempt = bm ? null : (d.exempt || null);
     st.barrage = bm;
     // Places du tableau : celle de l'exempt revient au vainqueur du barrage.
-    const slots = bm ? d.slots.map((sl) => (sl.kind === "bye" ? { kind: "match", ref: bm.id } : sl)) : d.slots;
+    // Places du 1er tour changées à la main (t.seats : permutation des places du tirage).
+    const perm = seatPerm(t, d);
+    const base = perm ? perm.map((i) => d.slots[i]) : d.slots;
+    const slots = bm ? base.map((sl) => (sl.kind === "bye" ? { kind: "match", ref: bm.id } : sl)) : base;
 
     // ----- Repêchage : les PLUS PETITS ÉCARTS de la phase 1 -----
     // Classement des perdants : écart (points du vainqueur − points du
@@ -915,6 +921,54 @@
     emit();
   }
 
+  /** Permutation valide des places du 1er tour (t.seats) pour ce tirage, sinon null. */
+  function seatPerm(t, d) {
+    const s = t.seats;
+    if (!s || !d || s.d !== d.id || !Array.isArray(s.p) || s.p.length !== d.slots.length) return null;
+    const seen = {};
+    for (const i of s.p) { if (!Number.isInteger(i) || i < 0 || i >= d.slots.length || seen[i]) return null; seen[i] = true; }
+    return s.p;
+  }
+  function swappedSeats(t, a, b) {
+    const n = t.draw.slots.length;
+    const p = (seatPerm(t, t.draw) || Array.from({ length: n }, (_, i) => i)).slice();
+    const x = p[a]; p[a] = p[b]; p[b] = x;
+    return p.every((v, i) => v === i) ? null : { d: t.draw.id, p };
+  }
+  /** Échange deux places du 1er tour du tableau final (positions a et b). */
+  function swapSeats(tid, a, b) {
+    const t = getTournament(tid);
+    if (!t || !t.draw) return { error: "Tirage non effectué." };
+    const n = t.draw.slots.length;
+    if (!Number.isInteger(a) || !Number.isInteger(b) || a < 0 || b < 0 || a >= n || b >= n || a === b) return { error: "Places invalides." };
+    const s = swappedSeats(t, a, b);
+    if (s) t.seats = s; else delete t.seats;
+    touch(t);
+    commit("échange de places");
+    return { ok: true };
+  }
+  /** Revient aux places du tirage. */
+  function resetSeats(tid) {
+    const t = getTournament(tid);
+    if (!t || !t.seats) return { ok: true };
+    delete t.seats;
+    touch(t);
+    commit("places d'origine");
+    return { ok: true };
+  }
+  /** Matchs déjà joués qui ne compteraient plus après l'échange des places a et b. */
+  function swapImpact(t, a, b) {
+    const cur = state(t);
+    if (!cur || !t.draw) return [];
+    const c = Object.assign({}, t);
+    const s = swappedSeats(t, a, b);
+    if (s) c.seats = s; else delete c.seats;
+    const sim = computeState(c);
+    return cur.all.filter((m) => !m.bye && m.status === "done" && m.stage !== "p1" &&
+      !(sim.byId[m.id] && sim.byId[m.id].status === "done" && sim.byId[m.id].winner === m.winner));
+  }
+  function hasSeatChanges(t) { return !!(t && t.draw && seatPerm(t, t.draw)); }
+
   /** Efface le score d'un match (correction par l'organisateur). */
   function clearScore(tid, matchId) {
     const t = getTournament(tid);
@@ -1063,6 +1117,7 @@
     plan, drawTournament, resetDraw,
     state, playerStatus, playerStats, roundName,
     recordScore, clearScore, clearImpact, simulate, adoptScoreF,
+    swapSeats, resetSeats, swapImpact, hasSeatChanges,
     onStorageError, getStorageError,
     replaceAll, importTournament, structureOf, migrate,
     defaultSettings, normSettings,

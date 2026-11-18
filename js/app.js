@@ -1766,6 +1766,16 @@
       });
       row.appendChild(redo); row.appendChild(undo);
       drawC.appendChild(row);
+      if (Store.hasSeatChanges(t)) {
+        const seatsRow = el(`<div class="btn-row" style="margin-top:12px"><span class="muted small">Des joueurs ont été changés de place dans le tableau final.</span></div>`);
+        const back = el('<button class="btn subtle" type="button">Rétablir l’ordre d’origine</button>');
+        back.onclick = () => ask({ title: "Rétablir l’ordre d’origine ?", html: "<p>Les places du tableau final reviennent à celles du tirage.</p>", ok: "Rétablir", cancel: "Garder les changements" }).then((ok) => {
+          if (!ok) return;
+          Store.resetSeats(tid); refresh(); toast("Ordre d’origine rétabli.");
+        });
+        seatsRow.appendChild(back);
+        drawC.appendChild(seatsRow);
+      }
     } else {
       drawC.appendChild(el(`<p class="muted">Pas encore de tirage. ${esc(planInfo(t, t.players.length).text)}</p>`));
       drawC.appendChild(el(`<a class="btn subtle" href="#/t/${encodeURIComponent(tid)}/players">Aller aux inscriptions</a>`));
@@ -2258,7 +2268,7 @@
           return c.cy < p.cy ? "↑" : "↓";
         });
         const c = treeCard(t, st, node, { D, level: l, compact: l === 0 && D.compact, final: l === L - 1, arrows, fresh: node.kind === "match" && isFresh(node.match) });
-        cards += `<div class="tc ${c.cls}${l === 0 ? " l0" : ""}" style="left:${Math.round(p.x + ox)}px;top:${Math.round(p.y + oy)}px"${node.match ? ` data-id="${esc(node.match.id)}"` : ""}>${c.html}</div>`;
+        cards += `<div class="tc ${c.cls}${l === 0 ? " l0" : ""}" style="left:${Math.round(p.x + ox)}px;top:${Math.round(p.y + oy)}px"${node.match ? ` data-id="${esc(node.match.id)}"` : ""}${l === 0 && !cons && Number.isInteger(node.slot) ? ` data-slot="${node.slot}"` : ""}>${c.html}</div>`;
       });
     }
 
@@ -2317,6 +2327,7 @@
         <span class="dock-sep"></span>
         <button type="button" class="ico rot" title="Rotation automatique" aria-label="Rotation automatique">⟳</button>
         <button type="button" class="ico fitbtn" title="Ajuster à l’écran / 100 %" aria-label="Zoom">⤢</button>
+        <button type="button" class="ico swapbtn" title="Changer des joueurs de place" aria-label="Changer des joueurs de place">⇄</button>
       </nav>
       <div class="rot-bar" hidden></div>
       <div class="tree-hint" hidden>Touchez ⤢ pour afficher à 100 %</div>
@@ -2331,9 +2342,58 @@
       if (b.dataset.v) { tv.view = b.dataset.v === "cons" ? "cons" : "main"; stopCycle(); update(); }
       else if (b.classList.contains("rot")) { S.rotateOn = !S.rotateOn; stopCycle(); update(); toast(S.rotateOn ? "Rotation automatique activée" : "Rotation automatique en pause"); }
       else if (b.classList.contains("fitbtn")) { S.fit = !S.fit; setPref("treeFit", S.fit); update(); }
+      else if (b.classList.contains("swapbtn")) {
+        S.swap = !S.swap; S.swapSel = null;
+        if (S.swap) {
+          S.rotateWas = S.rotateOn; S.rotateOn = false; stopCycle(); tv.view = "main";
+          toast("Changer de place : touchez une carte de la 1re colonne, puis celle avec qui l’échanger. ⇄ pour terminer.", "", null, { ms: 6000 });
+        } else S.rotateOn = S.rotateWas !== false;
+        update();
+      }
+    });
+    // Mode échange : 1er toucher = choisir une place, 2e = l'échanger avec celle-ci.
+    fitEl.addEventListener("click", (e) => {
+      if (!S.swap) return;
+      const c = e.target.closest(".tc.l0[data-slot]");
+      if (!c) return;
+      const i = parseInt(c.dataset.slot, 10);
+      if (S.swapSel == null) { S.swapSel = i; c.classList.add("swap-sel"); return; }
+      if (S.swapSel === i) { S.swapSel = null; c.classList.remove("swap-sel"); return; }
+      const a = S.swapSel;
+      S.swapSel = null;
+      confirmSwap(a, i);
     });
 
     function stopCycle() { clearTimeout(S.timer); S.timer = null; }
+    /** Qui occupe (ou occupera) une place du 1er tour. */
+    function seatLabel(t, st, i) {
+      const l = st.leaves[i];
+      if (!l) return "?";
+      if (l.kind === "exempt") return pname(t, l.pid);
+      if (l.kind === "rep") {
+        const pv = st.repechage.provisional && st.repechage.provisional[l.k];
+        return l.pid ? pname(t, l.pid) + " (repêché)" : "Repêché n°" + l.k + (pv ? " (pour l’instant " + pname(t, pv.pid) + ")" : "");
+      }
+      const m = l.match;
+      if (m.status === "done") return pname(t, m.winner);
+      return "Vainqueur de " + (m.p1 ? pname(t, m.p1) : "?") + " – " + (m.p2 ? pname(t, m.p2) : (m.barrage ? "1er perdant" : "?"));
+    }
+    function confirmSwap(a, b) {
+      const t = Store.getTournament(tid);
+      if (!t) return;
+      const st = Store.state(t);
+      const lost = Store.swapImpact(t, a, b);
+      ask({
+        title: "Échanger ces deux places ?",
+        html: `<p><b>${esc(seatLabel(t, st, a))}</b> ⇄ <b>${esc(seatLabel(t, st, b))}</b></p><p class="muted">Leurs adversaires au tableau final changent. Les places restent échangées sur tous les écrans (Réglages › « Rétablir l’ordre d’origine » pour revenir au tirage).</p>${lost.length ? `<p><b>${plural(lost.length, "match déjà joué ne comptera plus", "matchs déjà joués ne compteront plus")}</b> : ${lost.slice(0, 6).map((m) => esc(pname(t, m.p1)) + " – " + esc(pname(t, m.p2))).join(", ")}${lost.length > 6 ? "…" : ""}.</p>` : ""}`,
+        ok: "Échanger", cancel: "Annuler", danger: lost.length > 0,
+      }).then((ok) => {
+        if (!ok) { update(); return; }
+        const r = Store.swapSeats(tid, a, b);
+        if (r.error) toast(r.error, "err"); else toast("Places échangées ✓");
+        update();
+      });
+    }
     function startCycle(secs) {
       stopCycle();
       bar.hidden = false;
@@ -2459,6 +2519,8 @@
       S.lastView = tv.view;
       clear(fitEl);
       fitEl.appendChild(node);
+      root.classList.toggle("swap-mode", !!S.swap && !cons);
+      if (S.swap && S.swapSel != null) { const sel = fitEl.querySelector(`.tc.l0[data-slot="${S.swapSel}"]`); if (sel) sel.classList.add("swap-sel"); }
       applyFit();
 
       // Rotation

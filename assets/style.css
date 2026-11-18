@@ -859,3 +859,10 @@ body.fullbleed .app { max-width: none; margin: 0; padding: 0; }
 .pair-preview { margin: 4px 0 10px; padding-left: 22px; }
 .pair-preview li { margin: 2px 0; }
 
+/* ---------- Changer des joueurs de place (arbre) ---------- */
+.tree-dock .swapbtn { font-size: 1.05rem; }
+.tree-view.swap-mode .tree-dock .swapbtn { background: var(--gold); color: #fff; }
+.tree-view.swap-mode .tc.l0[data-slot] { cursor: pointer; outline: 2px dashed var(--gold-soft); outline-offset: 2px; }
+.tree-view.swap-mode .tc.l0[data-slot]:hover { outline-color: var(--gold); }
+.tree-view.swap-mode .tc.swap-sel { outline: 4px solid var(--gold); outline-offset: 3px; box-shadow: 0 0 0 8px rgba(176,137,47,.22); }
+
